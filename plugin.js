@@ -67,16 +67,6 @@ const SITES = [
       { key: "home", label: "Inicio", labelEn: "Home", path: "/" },
     ],
   },
-  {
-    id: "po",
-    name: "Poringa",
-    base: "https://www.poringa.net",
-    homePath: "/",
-    searchPath: (q) => "/buscar/?q=" + encodeURIComponent(q),
-    sections: [
-      { key: "home", label: "Recientes", labelEn: "Recent", path: "/" },
-    ],
-  },
 ];
 
 // ─── storage ───────────────────────────────────────────────────────────
@@ -397,7 +387,6 @@ async function fetchCards(site, secOrPath, page, q) {
   if (site.id === "pp") return parsePornPicsList(html, 36);
   if (site.id === "bs") return parseBabeSourceList(html, 36);
   if (site.id === "pm") return parsePmateList(html, 36);
-  if (site.id === "po") return parsePoringaList(html, 36);
   return [];
 }
 
@@ -407,7 +396,6 @@ async function fetchPages(site, card) {
   if (site.id === "pp") pages = parsePornPicsPages(html);
   else if (site.id === "bs") pages = parseBabeSourcePages(html);
   else if (site.id === "pm") pages = parsePmatePages(html);
-  else if (site.id === "po") pages = parsePoringaPages(html);
   return pages.slice(0, PAGES_MAX);
 }
 
@@ -940,106 +928,154 @@ function searchTree(state) {
   };
 }
 
-function readerTree(state) {
-  const r = state.reader || {};
-  const pages = r.imgs || (state.detail && state.detail.pages) || [];
-  const title = r.title || (state.detail && state.detail.meta && state.detail.meta.title) || "Álbum";
-
-  if (!pages.length) {
-    return {
-      type: "Scaffold",
-      appBar: {
-        title: title,
-        leading: {
-          type: "IconButton",
-          key: "backDet",
-          icon: "arrow_back",
-          onPressed: { event: "popBack" },
-        },
-      },
-      body: {
-        type: "emptyState",
-        icon: "image",
-        title: "No hay fotos en este álbum",
-        titleEn: "No photos in this album",
-      },
-    };
-  }
-
-  if (pagesDisponible() && pages.length >= 2 && pages.length <= 250) {
-    return {
-      type: "Scaffold",
-      appBar: {
-        title: title + " (" + pages.length + ")",
-        leading: {
-          type: "IconButton",
-          key: "backDet",
-          icon: "arrow_back",
-          onPressed: { event: "popBack" },
-        },
-      },
-      body: {
-        type: "pages",
-        key: "reader",
-        items: pages.map((u, i) => ({
-          type: "Image",
-          key: "p" + i,
-          url: typeof u === "string" ? u : u.url,
-          fill: true,
-          fit: "width",
-          aspect: "2:3",
-          alt: "Foto " + (i + 1),
-        })),
-      },
-    };
-  }
-
-  const kids = pages.map((u, i) => ({
+function pageNodes(p, i, pre) {
+  return [{
     type: "Image",
-    key: "p" + i,
-    url: typeof u === "string" ? u : u.url,
+    key: (pre || "") + "p" + i,
+    url: typeof p === "string" ? p : p.url,
+    alt: "Foto " + (i + 1),
+    altEn: "Photo " + (i + 1),
     fill: true,
     fit: "width",
     aspect: "2:3",
-    alt: "Foto " + (i + 1),
-  }));
-  kids.push({
-    type: "Column",
-    padding: 24,
+    fallback: {
+      type: "Column",
+      padding: 16,
+      children: [
+        {
+          type: "Text",
+          text: "Foto " + (i + 1),
+          textEn: "Photo " + (i + 1),
+          color: "muted",
+        },
+      ],
+    },
+  }];
+}
+
+function paginaFit(p, i, pre) {
+  const k = (pre || "") + "p" + i;
+  return {
+    type: "SingleChildScrollView",
+    key: k + "z",
+    zoom: true,
+    children: [
+      {
+        type: "Image",
+        key: k,
+        url: typeof p === "string" ? p : p.url,
+        alt: "Foto " + (i + 1),
+        altEn: "Photo " + (i + 1),
+        fill: true,
+        fit: "width",
+        aspect: "2:3",
+      },
+    ],
+  };
+}
+
+function finAlbumNode(r) {
+  const n = (r.imgs && r.imgs.length) || 0;
+  return {
+    type: "Card",
+    key: "finCap",
+    margin: 16,
+    padding: 12,
     gap: 8,
     children: [
       {
-        type: "Text",
-        text: "Fin del álbum · " + pages.length + " fotos",
-        textEn: "End of album · " + pages.length + " photos",
-        style: "caption",
-        color: "muted",
-      },
-      {
-        type: "ElevatedButton",
-        key: "finBack",
-        icon: "arrow_back",
-        labelText: "Volver",
-        labelTextEn: "Back",
-        onPressed: { event: "popBack" },
+        type: "Row",
+        gap: 8,
+        children: [
+          {
+            type: "IconButton",
+            key: "finBack",
+            icon: "arrow_back",
+            labelText: "Volver",
+            labelTextEn: "Back",
+            onPressed: { event: "popBack" },
+          },
+          {
+            type: "Text",
+            key: "finFin",
+            text: "Fin del álbum · " + n + " fotos",
+            textEn: "End of album · " + n + " photos",
+            style: "caption",
+            color: "muted",
+            flex: 1,
+          },
+        ],
       },
     ],
-  });
+  };
+}
+
+function readerTree(state) {
+  const r = state.reader;
+  if (!r) {
+    return {
+      type: "Column",
+      padding: 32,
+      gap: 12,
+      crossAxisAlignment: "center",
+      children: [
+        { type: "CircularProgressIndicator" },
+        { type: "Text", text: "Cargando álbum…", textEn: "Loading album…", color: "muted" },
+      ],
+    };
+  }
+  const pages = Array.isArray(r.imgs) ? r.imgs : [];
+  if (!pages.length) {
+    return {
+      type: "Column",
+      padding: 32,
+      gap: 12,
+      crossAxisAlignment: "center",
+      children: [
+        { type: "Icon", name: "error", color: "muted" },
+        {
+          type: "Text",
+          text: "No se pudieron cargar las fotos de este álbum.",
+          textEn: "Could not load this album's photos.",
+          color: "muted",
+        },
+        {
+          type: "ElevatedButton",
+          icon: "arrow_back",
+          labelText: "Volver",
+          labelTextEn: "Back",
+          onPressed: { event: "popBack" },
+        },
+      ],
+    };
+  }
+  const pre = "r" + (r.tk || 0) + "-";
+  const scrollKey = "pages-" + String(r.id || r.slug || "x").replace(/[^a-z0-9]/gi, "").slice(-20) + "-" + (r.tk || 0);
+  // Modo tira (como Lectura +18 por defecto): scroll vertical con
+  // todas las fotos. Es el más fiable en Kino.
+  const imgs = pages.flatMap((p, i) => pageNodes(p, i, pre));
+  imgs.push(finAlbumNode(r));
   return {
     type: "Scaffold",
-    appBar: {
-      title: title + " (" + pages.length + ")",
-      leading: {
-        type: "IconButton",
-        key: "backDet",
-        icon: "arrow_back",
-        onPressed: { event: "popBack" },
-      },
-    },
     body: {
-      type: "ListView",
-      key: "tira",
-      items: kids,
+      type: "Column",
+      children: [
+        {
+          type: "SingleChildScrollView",
+          key: scrollKey,
+          flex: 1,
+          zoom: true,
+          children: [
+            {
+              type: "Column",
+              gap: 4,
+              crossAxisAlignment: "center",
+              fill: true,
+              children: imgs,
+            },
+          ],
+        },
+      ],
     },
   };
 }
@@ -1374,7 +1410,6 @@ export async function screenEvent(ev) {
         if (site.id === "pp") url = "https://www.pornpics.com/es/galleries/" + slug + "/";
         else if (site.id === "bs") url = site.base + "/galleries/" + slug + ".html";
         else if (site.id === "pm") url = site.base + "/" + slug + "/";
-        else if (site.id === "po") url = site.base + "/posts/" + slug;
       }
       if (!url) {
         return { toast: "Álbum no encontrado. Vuelve a cargar el listado." };
