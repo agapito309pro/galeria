@@ -1,18 +1,15 @@
 // Gallery Hot — galerías de fotos adultas (apiVersion 14, screen).
 // Fuentes: PornPics, BabeSource, PMateHunter, Poringa.
-// Arquitectura inspirada en Lectura +18 / Yuri Online (Hotaru Yume):
-//   - Pantalla propia con Inicio, Biblioteca, Favoritos, Historial
-//   - Fuentes conmutables por chips
-//   - Detalle + lector vertical a pantalla completa
-//   - Páginas en kino.storage; estado de pantalla mínimo
-//
-// Solo recolecta galerías de fotos (no vídeo). Marca adult: true.
+// UI según contrato real de Kino (mismo patrón que Lectura +18):
+//   ListView+items+columns, Card+onTap, Image+aspect, Chips, Skeleton,
+//   emptyState, ElevatedButton, Icon name=…
+// v1.0.1 — parsers con comillas simples/dobles; widgets correctos;
+//   home con esqueletos + every cargarRoot; nunca pantalla en blanco.
 
 const UA =
   "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
 const PER_PAGE = 18;
 const PAGES_MAX = 200;
-const LIB_MAX = 120;
 const FAV_KEY = "gh_fav";
 const HIST_KEY = "gh_hist";
 const PREF_SRC = "gh_src";
@@ -24,16 +21,13 @@ const TABS = [
   { value: "historial", text: "Historial", textEn: "History" },
 ];
 
-// ─── fuentes ───────────────────────────────────────────────────────────
 const SITES = [
   {
     id: "pp",
     name: "PornPics",
     base: "https://www.pornpics.com",
-    lang: "es",
     homePath: "/es/recent/",
     searchPath: (q) => "/es/?q=" + encodeURIComponent(q),
-    catPath: (slug) => "/es/" + slug + "/",
     sections: [
       { key: "recent", label: "Recientes", labelEn: "Recent", path: "/es/recent/" },
       { key: "popular", label: "Populares", labelEn: "Popular", path: "/es/popular/" },
@@ -50,7 +44,7 @@ const SITES = [
     name: "BabeSource",
     base: "https://babesource.com",
     homePath: "/newest/",
-    searchPath: (q) => "/search/" + encodeURIComponent(q.replace(/\s+/g, "-")) + "/",
+    searchPath: (q) => "/search/" + encodeURIComponent(String(q).replace(/\s+/g, "-")) + "/",
     sections: [
       { key: "newest", label: "Nuevas", labelEn: "Newest", path: "/newest/" },
       { key: "top", label: "Mejor valoradas", labelEn: "Top rated", path: "/top-rated/" },
@@ -85,7 +79,7 @@ const SITES = [
   },
 ];
 
-// ─── storage helpers ───────────────────────────────────────────────────
+// ─── storage ───────────────────────────────────────────────────────────
 function getJson(key, def) {
   try {
     const s = kino.storage.get(key);
@@ -99,7 +93,7 @@ function setJson(key, val) {
   try {
     kino.storage.set(key, JSON.stringify(val));
   } catch (e) {
-    kino.log("storage", e.message);
+    kino.log("storage", e && e.message);
   }
 }
 
@@ -120,14 +114,14 @@ function siteOfId(id) {
 function headersDe(site) {
   return {
     Accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-    "Accept-Language": site.lang === "es" ? "es,en;q=0.8" : "en,es;q=0.8",
+    "Accept-Language": "es,en;q=0.8",
     Referer: site.base + "/",
     "User-Agent": UA,
   };
 }
 
 async function getHtml(site, path, timeoutMs) {
-  const url = path.startsWith("http") ? path : site.base + path;
+  const url = path && String(path).indexOf("http") === 0 ? path : site.base + (path || "/");
   const r = await kino.fetch(url, {
     headers: headersDe(site),
     timeoutMs: timeoutMs || 20000,
@@ -157,58 +151,53 @@ function decode(s) {
     .trim();
 }
 
-function absUrl(base, u) {
-  if (!u) return "";
-  u = String(u).trim().replace(/&amp;/g, "&");
-  if (u.startsWith("//")) return "https:" + u;
-  if (u.startsWith("http")) return u;
-  if (u.startsWith("/")) return base.replace(/\/$/, "") + u;
-  return base.replace(/\/$/, "") + "/" + u;
+function titleFromSlug(slug) {
+  return String(slug || "")
+    .replace(/-\d{5,}$/, "")
+    .replace(/-/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// ─── parsers por fuente ────────────────────────────────────────────────
+// ─── parsers ───────────────────────────────────────────────────────────
 
 function parsePornPicsList(html, max) {
   const out = [];
   const seen = {};
+  // comillas simples o dobles; img lazy-load con src o data-src
   const re =
-    /href="(https?:\/\/www\.pornpics\.com\/es\/galleries\/([^"/]+)\/?)"[^>]*>[\s\S]{0,800}?<img[^>]+(?:src|data-src)="(https?:\/\/cdni\.pornpics\.com\/[^"]+)"/gi;
+    /href=["'](https?:\/\/(?:www\.)?pornpics\.com\/es\/galleries\/([^"'/]+)\/?)["'][^>]*>[\s\S]{0,500}?<img[^>]+(?:src|data-src)=["'](https?:\/\/cdni\.pornpics\.com\/[^"']+)["']/gi;
   let m;
   while ((m = re.exec(html)) !== null && out.length < (max || 40)) {
-    const url = m[1];
     const slug = m[2];
     if (seen[slug]) continue;
     seen[slug] = true;
-    let poster = m[3];
-    // prefer 460 thumb already; keep as is
-    const title = slug
-      .replace(/-\d+$/, "")
-      .replace(/-/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
     out.push({
       id: "pp:" + slug,
       slug: slug,
-      url: url,
-      title: title,
-      poster: poster,
+      url: "https://www.pornpics.com/es/galleries/" + slug + "/",
+      title: titleFromSlug(slug),
+      poster: m[3],
       siteId: "pp",
       adult: true,
     });
   }
-  // fallback looser
   if (!out.length) {
     const re2 =
-      /href="(\/es\/galleries\/([^"/]+)\/?)"[\s\S]{0,600}?src="(https?:\/\/cdni\.pornpics\.com\/[^"]+)"/gi;
+      /href=["'](?:https?:\/\/(?:www\.)?pornpics\.com)?(\/es\/galleries\/([^"'/]+)\/?)["']/gi;
     while ((m = re2.exec(html)) !== null && out.length < (max || 40)) {
       const slug = m[2];
       if (seen[slug]) continue;
       seen[slug] = true;
+      const win = html.slice(m.index, m.index + 900);
+      const im = win.match(
+        /(?:src|data-src)=["'](https?:\/\/cdni\.pornpics\.com\/[^"']+)["']/i
+      );
       out.push({
         id: "pp:" + slug,
         slug: slug,
         url: "https://www.pornpics.com/es/galleries/" + slug + "/",
-        title: slug.replace(/-\d+$/, "").replace(/-/g, " "),
-        poster: m[3],
+        title: titleFromSlug(slug),
+        poster: im ? im[1] : "",
         siteId: "pp",
         adult: true,
       });
@@ -220,24 +209,24 @@ function parsePornPicsList(html, max) {
 function parsePornPicsPages(html) {
   const pages = [];
   const seen = {};
-  // full size links
-  const re = /href="(https?:\/\/cdni\.pornpics\.com\/1280\/[^"]+\.(?:jpe?g|webp))"/gi;
   let m;
-  while ((m = re.exec(html)) !== null) {
-    const u = m[1];
-    if (seen[u]) continue;
-    seen[u] = true;
-    pages.push(u);
+  const reFull =
+    /(?:href|src|data-src)=["'](https?:\/\/cdni\.pornpics\.com\/1280\/[^"']+\.(?:jpe?g|webp))["']/gi;
+  while ((m = reFull.exec(html)) !== null) {
+    if (!seen[m[1]]) {
+      seen[m[1]] = true;
+      pages.push(m[1]);
+    }
   }
   if (pages.length < 3) {
-    // thumbs → upgrade 460 → 1280
-    const re2 =
-      /(?:src|data-src)="(https?:\/\/cdni\.pornpics\.com\/)(460)(\/[^"]+\.(?:jpe?g|webp))"/gi;
-    while ((m = re2.exec(html)) !== null) {
+    const reThumb =
+      /(?:src|data-src)=["'](https?:\/\/cdni\.pornpics\.com\/)(460)(\/[^"']+\.(?:jpe?g|webp))["']/gi;
+    while ((m = reThumb.exec(html)) !== null) {
       const u = m[1] + "1280" + m[3];
-      if (seen[u]) continue;
-      seen[u] = true;
-      pages.push(u);
+      if (!seen[u]) {
+        seen[u] = true;
+        pages.push(u);
+      }
     }
   }
   return pages.slice(0, PAGES_MAX);
@@ -247,29 +236,23 @@ function parseBabeSourceList(html, max) {
   const out = [];
   const seen = {};
   const re =
-    /href="(https?:\/\/babesource\.com\/galleries\/([^"/]+)\.html)"/gi;
+    /href=["'](https?:\/\/(?:www\.)?babesource\.com\/galleries\/([^"'/]+)\.html)["']/gi;
   let m;
   while ((m = re.exec(html)) !== null && out.length < (max || 40)) {
-    const url = m[1];
     const slug = m[2];
     if (seen[slug]) continue;
     seen[slug] = true;
-    // look nearby for thumb
-    const win = html.slice(Math.max(0, m.index - 400), m.index + 800);
+    const win = html.slice(Math.max(0, m.index - 500), m.index + 900);
     let poster = "";
     const im = win.match(
-      /(?:src|data-src)="(https?:\/\/media\.babesource\.com\/galleries\/[^"]+\.(?:jpe?g|webp)[^"]*)"/i
+      /(?:src|data-src|href)=["'](https?:\/\/media\.babesource\.com\/galleries\/[^"']+\.(?:jpe?g|webp)[^"']*)["']/i
     );
-    if (im) poster = im[1].replace(/\.webp(\?|$)/, ".jpg$1");
-    const title = slug
-      .replace(/-\d+$/, "")
-      .replace(/-/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
+    if (im) poster = im[1].replace(/\.webp(\?|$)/i, ".jpg$1").split("?")[0];
     out.push({
       id: "bs:" + slug,
       slug: slug,
-      url: url,
-      title: title,
+      url: m[1],
+      title: titleFromSlug(slug),
       poster: poster,
       siteId: "bs",
       adult: true,
@@ -281,15 +264,13 @@ function parseBabeSourceList(html, max) {
 function parseBabeSourcePages(html) {
   const pages = [];
   const seen = {};
-  // thumbs path → try without /thumbs/ for full
   const re =
-    /(?:src|data-src|href)="(https?:\/\/media\.babesource\.com\/galleries\/[a-f0-9]+\/(?:thumbs\/)?[^"]+\.(?:jpe?g|webp)[^"]*)"/gi;
+    /(?:src|data-src|href)=["'](https?:\/\/media\.babesource\.com\/galleries\/[a-f0-9]+\/(?:thumbs\/)?[^"']+\.(?:jpe?g|webp)[^"']*)["']/gi;
   let m;
   while ((m = re.exec(html)) !== null && pages.length < PAGES_MAX) {
     let u = m[1].replace(/\.webp(\?|$)/i, ".jpg$1").split("?")[0];
-    // prefer non-thumb if possible
     const full = u.replace(/\/thumbs\//, "/");
-    if (!seen[full] && !seen[u]) {
+    if (!seen[full]) {
       seen[full] = true;
       pages.push(full);
     }
@@ -300,33 +281,28 @@ function parseBabeSourcePages(html) {
 function parsePmateList(html, max) {
   const out = [];
   const seen = {};
-  // post links that look like galleries (not /model/)
+  const skip =
+    /^(model|models|sort|tag|category|page|wp-|feed|author|random|pornstars|countries|channels|paysites|discounts|games|search|login|register)/i;
   const re =
-    /href="(https?:\/\/(?:www\.)?pmatehunter\.com\/([a-z0-9][a-z0-9-]{4,})\/?)"/gi;
+    /href=["'](https?:\/\/(?:www\.)?pmatehunter\.com\/([a-z0-9][a-z0-9-]{4,})\/?)["']/gi;
   let m;
   while ((m = re.exec(html)) !== null && out.length < (max || 40)) {
-    const url = m[1];
     const slug = m[2];
-    if (
-      seen[slug] ||
-      /^(model|models|sort|tag|category|page|wp-|feed|author)/i.test(slug)
-    )
-      continue;
+    if (seen[slug] || skip.test(slug)) continue;
     seen[slug] = true;
-    const win = html.slice(Math.max(0, m.index - 200), m.index + 1200);
+    const win = html.slice(Math.max(0, m.index - 200), m.index + 1400);
     let poster = "";
     const im = win.match(
-      /(?:src|data-src|srcset)="(https?:\/\/cdn\.pmatehunter\.com\/[^"\s]+\.(?:jpe?g|webp)[^"]*)"/i
+      /(?:src|data-src|srcset)=["'](https?:\/\/cdn\.pmatehunter\.com\/[^"'\s]+\.(?:jpe?g|webp)[^"']*)["']/i
     );
     if (im) {
       poster = im[1].split(/\s+/)[0].replace(/_w\d+\./, "_w800.");
     }
-    const title = slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
     out.push({
       id: "pm:" + slug,
       slug: slug,
-      url: url.replace(/\/$/, "") + "/",
-      title: title,
+      url: m[1].replace(/\/$/, "") + "/",
+      title: titleFromSlug(slug),
       poster: poster,
       siteId: "pm",
       adult: true,
@@ -338,40 +314,15 @@ function parsePmateList(html, max) {
 function parsePmatePages(html) {
   const pages = [];
   const seen = {};
-  // content images, prefer larger sizes
-  const re =
-    /(https?:\/\/cdn\.pmatehunter\.com\/content\/[^"'\s]+?(?:_w800|_masonry_1200|_w1200)?\.(?:jpe?g|webp))/gi;
   let m;
+  const re =
+    /(https?:\/\/cdn\.pmatehunter\.com\/content\/[^"'\s,]+?\.(?:jpe?g|webp))/gi;
   while ((m = re.exec(html)) !== null && pages.length < PAGES_MAX) {
     let u = m[1].split(/\s+/)[0].split("?")[0];
-    // normalize to larger
-    u = u
-      .replace(/_w\d+\./, "_w800.")
-      .replace(/_masonry_\d+\./, "_masonry_1200.");
-    if (seen[u]) continue;
-    seen[u] = true;
-    pages.push(u);
-  }
-  // also srcset
-  const re2 =
-    /srcset="([^"]+cdn\.pmatehunter\.com\/content\/[^"]+)"/gi;
-  while ((m = re2.exec(html)) !== null && pages.length < PAGES_MAX) {
-    const parts = m[1].split(",");
-    let best = "";
-    let bestW = 0;
-    for (const p of parts) {
-      const mm = p.trim().match(/(\S+)\s+(\d+)w/);
-      if (mm) {
-        const w = parseInt(mm[2], 10);
-        if (w > bestW) {
-          bestW = w;
-          best = mm[1];
-        }
-      }
-    }
-    if (best && !seen[best]) {
-      seen[best] = true;
-      pages.push(best);
+    u = u.replace(/_w\d+\./, "_w800.").replace(/_masonry_\d+\./, "_masonry_1200.");
+    if (!seen[u]) {
+      seen[u] = true;
+      pages.push(u);
     }
   }
   return pages;
@@ -380,53 +331,38 @@ function parsePmatePages(html) {
 function parsePoringaList(html, max) {
   const out = [];
   const seen = {};
-  // posts with images
-  const re =
-    /href="(https?:\/\/(?:www\.)?poringa\.net\/posts\/([^"/]+)\/?)"/gi;
   let m;
+  // /posts/categoria/ID/Titulo.html  o absolutas
+  const re =
+    /href=["']((?:https?:\/\/(?:www\.)?poringa\.net)?\/posts\/([a-z0-9-]+)\/(\d+)\/([^"'?#]+))["']/gi;
   while ((m = re.exec(html)) !== null && out.length < (max || 40)) {
-    const url = m[1];
-    const slug = m[2];
-    if (seen[slug]) continue;
-    seen[slug] = true;
-    const win = html.slice(Math.max(0, m.index - 100), m.index + 1500);
+    const id = m[3];
+    if (seen[id]) continue;
+    seen[id] = true;
+    let path = m[1];
+    if (path.indexOf("http") !== 0) path = "https://www.poringa.net" + path;
+    const slug = id + "-" + String(m[4] || "").replace(/\.html$/i, "");
+    const win = html.slice(Math.max(0, m.index - 150), m.index + 1600);
     let poster = "";
     const im = win.match(
-      /(?:src|data-src)="(https?:\/\/s\d*\.poringa\.net\/[^"]+\.(?:jpe?g|webp|png|gif)[^"]*)"/i
+      /(?:src|data-src)=["']((?:https?:)?\/\/s\d*\.poringa\.net\/[^"']+\.(?:jpe?g|webp|png|gif)[^"']*)["']/i
     );
-    if (im) poster = im[1];
-    // title nearby
-    let title = slug.replace(/-/g, " ");
-    const t = win.match(/<h[123][^>]*>([^<]{3,120})</);
+    if (im) {
+      poster = im[1];
+      if (poster.indexOf("//") === 0) poster = "https:" + poster;
+    }
+    let title = decode(String(m[4] || "").replace(/\.html$/i, "").replace(/-/g, " "));
+    const t = win.match(/<(?:h[123]|span|div)[^>]*class=["'][^"']*title[^"']*["'][^>]*>([^<]{3,120})</i);
     if (t) title = decode(t[1]);
     out.push({
-      id: "po:" + slug,
+      id: "po:" + id,
       slug: slug,
-      url: url,
-      title: title,
+      url: path,
+      title: title || slug,
       poster: poster,
       siteId: "po",
       adult: true,
     });
-  }
-  // alternative: post boxes
-  if (!out.length) {
-    const re2 =
-      /href="(\/posts\/([^"/]+)\/?)"[^>]*>[\s\S]{0,400}?src="([^"]+\.(?:jpe?g|webp|png))"/gi;
-    while ((m = re2.exec(html)) !== null && out.length < (max || 40)) {
-      const slug = m[2];
-      if (seen[slug]) continue;
-      seen[slug] = true;
-      out.push({
-        id: "po:" + slug,
-        slug: slug,
-        url: "https://www.poringa.net/posts/" + slug + "/",
-        title: slug.replace(/-/g, " "),
-        poster: absUrl("https://s2.poringa.net", m[3]),
-        siteId: "po",
-        adult: true,
-      });
-    }
   }
   return out;
 }
@@ -435,40 +371,31 @@ function parsePoringaPages(html) {
   const pages = [];
   const seen = {};
   const re =
-    /(?:src|data-src|href)="(https?:\/\/s\d*\.poringa\.net\/[^"]+\.(?:jpe?g|webp|png|gif)[^"]*)"/gi;
+    /(?:src|data-src|href)=["'](https?:\/\/s\d*\.poringa\.net\/[^"']+\.(?:jpe?g|webp|png|gif)[^"']*)["']/gi;
   let m;
   while ((m = re.exec(html)) !== null && pages.length < PAGES_MAX) {
     const u = m[1].split("?")[0];
-    if (seen[u] || /avatar|icon|logo|emoji|smiley/i.test(u)) continue;
+    if (seen[u] || /avatar|icon|logo|emoji|smiley|badge/i.test(u)) continue;
     seen[u] = true;
     pages.push(u);
   }
   return pages;
 }
 
-// ─── data layer ────────────────────────────────────────────────────────
+// ─── data ──────────────────────────────────────────────────────────────
+async function fetchCards(site, secOrPath, page, q) {
+  let path = site.homePath || "/";
+  if (q && site.searchPath) path = site.searchPath(q);
+  else if (typeof secOrPath === "string") path = secOrPath;
+  else if (secOrPath && secOrPath.path) path = secOrPath.path;
 
-async function fetchCards(site, pathOrSec, page, q) {
-  let path = "/";
-  if (q && site.searchPath) {
-    path = site.searchPath(q);
-  } else if (typeof pathOrSec === "string") {
-    path = pathOrSec;
-  } else if (pathOrSec && pathOrSec.path) {
-    path = pathOrSec.path;
-  } else {
-    path = site.homePath || "/";
+  const p = parseInt(page, 10) || 1;
+  if (p > 1) {
+    if (site.id === "pp") path = path.replace(/\/?$/, "/") + (path.indexOf("?") >= 0 ? "&" : "?") + "page=" + p;
+    else if (site.id === "bs") path = path.replace(/\/?$/, "/") + "page/" + p + "/";
+    else if (site.id === "pm") path = path + (path.indexOf("?") >= 0 ? "&" : "?") + "paged=" + p;
   }
-  // pagination hints
-  if (page && page > 1) {
-    if (site.id === "pp") {
-      path = path.replace(/\/?$/, "/") + "?page=" + page;
-    } else if (site.id === "bs") {
-      path = path.replace(/\/?$/, "/") + "page/" + page + "/";
-    } else if (site.id === "pm") {
-      path = path + (path.indexOf("?") >= 0 ? "&" : "?") + "paged=" + page;
-    }
-  }
+
   const html = await getHtml(site, path, 22000);
   if (site.id === "pp") return parsePornPicsList(html, 36);
   if (site.id === "bs") return parseBabeSourceList(html, 36);
@@ -487,7 +414,7 @@ async function fetchPages(site, card) {
   return pages.slice(0, PAGES_MAX);
 }
 
-// ─── favoritos / historial ─────────────────────────────────────────────
+// ─── fav / hist ────────────────────────────────────────────────────────
 function loadFavs() {
   return getJson(FAV_KEY, []) || [];
 }
@@ -514,7 +441,6 @@ function toggleFav(card) {
   saveFavs(list);
   return list;
 }
-
 function loadHist() {
   return getJson(HIST_KEY, []) || [];
 }
@@ -533,196 +459,224 @@ function pushHist(card) {
   setJson(HIST_KEY, list.slice(0, 80));
 }
 
-// ─── UI helpers ────────────────────────────────────────────────────────
-function cardTile(c, keyPrefix) {
+// ─── UI (API real Kino / Lectura+18) ───────────────────────────────────
+const CARDINFO = {};
+function rememberCard(it) {
+  try {
+    if (it && it.id && CARDINFO[it.id] === undefined) {
+      CARDINFO[it.id] = {
+        title: it.title || "",
+        poster: it.poster || "",
+        s: it.siteId || "",
+        u: it.url || "",
+        slug: it.slug || "",
+      };
+      const ks = Object.keys(CARDINFO);
+      if (ks.length > 300) delete CARDINFO[ks[0]];
+    }
+  } catch (e) {}
+}
+
+function posterCard(it, prefix) {
+  rememberCard(it);
+  const keySafe = String(it.id || it.slug || "x").replace(/[^a-z0-9:_-]/gi, "-");
   return {
-    type: "InkWell",
-    key: (keyPrefix || "c") + ":" + c.id,
-    onPressed: {
+    type: "Card",
+    key: (prefix || "c") + keySafe,
+    flush: true,
+    onTap: {
       event: "openDetail",
-      arg: { id: c.id, slug: c.slug, siteId: c.siteId, url: c.url, title: c.title, poster: c.poster },
-    },
-    child: {
-      type: "Column",
-      crossAxisAlignment: "start",
-      children: [
-        {
-          type: "AspectRatio",
-          aspectRatio: 0.7,
-          child: {
-            type: "ClipRRect",
-            borderRadius: 8,
-            child: c.poster
-              ? { type: "Image", url: c.poster, fit: "cover", adult: true }
-              : {
-                  type: "Container",
-                  color: "#2a2a2a",
-                  child: {
-                    type: "Center",
-                    child: { type: "Icon", icon: "image", size: 36, color: "#666" },
-                  },
-                },
-          },
-        },
-        {
-          type: "Padding",
-          padding: { top: 6, left: 2, right: 2 },
-          child: {
-            type: "Text",
-            text: c.title || c.slug,
-            maxLines: 2,
-            overflow: "ellipsis",
-            style: { fontSize: 12 },
-          },
-        },
-      ],
-    },
-  };
-}
-
-function gridOf(cards, keyPrefix) {
-  if (!cards || !cards.length) {
-    return {
-      type: "Padding",
-      padding: 24,
-      child: {
-        type: "Text",
-        text: "Sin resultados",
-        textEn: "No results",
-        style: { color: "#888" },
+      arg: {
+        id: it.id,
+        slug: it.slug,
+        siteId: it.siteId,
+        url: it.url,
+        title: it.title,
+        poster: it.poster,
       },
-    };
-  }
-  return {
-    type: "GridView",
-    crossAxisCount: 3,
-    mainAxisSpacing: 10,
-    crossAxisSpacing: 10,
-    childAspectRatio: 0.55,
-    padding: { left: 10, right: 10, top: 8, bottom: 24 },
-    children: cards.map((c, i) => cardTile(c, (keyPrefix || "g") + i)),
-  };
-}
-
-function skeletonGrid(n) {
-  const cells = [];
-  for (let i = 0; i < (n || 9); i++) {
-    cells.push({
-      type: "Column",
-      children: [
-        {
-          type: "AspectRatio",
-          aspectRatio: 0.7,
-          child: {
-            type: "Container",
-            color: "#2a2a2a",
-            borderRadius: 8,
-          },
-        },
-        {
-          type: "Container",
-          margin: { top: 6 },
-          height: 12,
-          color: "#333",
-          borderRadius: 4,
-        },
-      ],
-    });
-  }
-  return {
-    type: "GridView",
-    crossAxisCount: 3,
-    mainAxisSpacing: 10,
-    crossAxisSpacing: 10,
-    childAspectRatio: 0.55,
-    padding: { left: 10, right: 10, top: 8, bottom: 24 },
-    children: cells,
-  };
-}
-
-function fuenteChips(state) {
-  const cur = siteDe(state).id;
-  return {
-    type: "SingleChildScrollView",
-    scrollDirection: "horizontal",
-    padding: { left: 10, right: 10, top: 8, bottom: 4 },
-    child: {
-      type: "Row",
-      children: SITES.map((s) => ({
-        type: "Padding",
-        padding: { right: 8 },
-        child: {
-          type: "ActionChip",
-          key: "src:" + s.id,
-          label: s.name,
-          selected: cur === s.id,
-          onPressed: { event: "fuente", arg: s.id },
-        },
-      })),
     },
-  };
-}
-
-function sectionBlock(label, cards, key, loading) {
-  return {
-    type: "Column",
-    crossAxisAlignment: "start",
     children: [
       {
-        type: "Padding",
-        padding: { left: 12, right: 12, top: 12, bottom: 4 },
-        child: {
-          type: "Text",
-          text: label,
-          style: { fontSize: 16, fontWeight: "w600" },
+        type: "Image",
+        url: it.poster || "",
+        aspect: "2:3",
+        width: 120,
+        alt: it.title || "",
+        fallback: {
+          type: "Column",
+          padding: 16,
+          crossAxisAlignment: "center",
+          children: [{ type: "Icon", name: "image", color: "muted" }],
         },
       },
-      loading && (!cards || !cards.length)
-        ? skeletonGrid(6)
-        : {
-            type: "SizedBox",
-            height: 220,
-            child: {
-              type: "ListView",
-              scrollDirection: "horizontal",
-              padding: { left: 10, right: 10 },
-              children: (cards || []).slice(0, 12).map((c, i) => ({
-                type: "SizedBox",
-                width: 110,
-                child: cardTile(c, key + i),
-              })),
-            },
-          },
+      {
+        type: "Text",
+        text: it.title || it.slug || "",
+        textEn: it.title || it.slug || "",
+        style: "caption",
+        padding: 8,
+      },
     ],
   };
 }
 
-function errorTree(msg, retryEvent) {
+let skelSeq = 0;
+function skelCard() {
   return {
-    type: "Center",
-    child: {
-      type: "Column",
-      mainAxisSize: "min",
-      children: [
-        { type: "Icon", icon: "error_outline", size: 48, color: "#c44" },
-        {
-          type: "Padding",
-          padding: 12,
-          child: { type: "Text", text: msg, textAlign: "center" },
-        },
-        retryEvent
-          ? {
-              type: "FilledButton",
-              child: { type: "Text", text: "Reintentar", textEn: "Retry" },
-              onPressed: { event: retryEvent },
-            }
-          : { type: "SizedBox", height: 1 },
-      ],
-    },
+    type: "Card",
+    key: "sk" + skelSeq++,
+    flush: true,
+    children: [
+      { type: "Skeleton", shape: "block", height: 180 },
+      { type: "Skeleton", shape: "line", padding: 8 },
+    ],
+  };
+}
+function skelGrid(n) {
+  const cards = [];
+  for (let i = 0; i < (n || 12); i++) cards.push(skelCard());
+  return {
+    type: "ListView",
+    key: "skel",
+    columns: { compact: 3, medium: 4, expanded: 6 },
+    items: cards,
   };
 }
 
-// ─── tab bodies ────────────────────────────────────────────────────────
+function titleGridOf(items, emptyNode) {
+  if (!items || !items.length) {
+    return (
+      emptyNode || {
+        type: "emptyState",
+        icon: "image",
+        title: "Sin resultados",
+        titleEn: "No results",
+      }
+    );
+  }
+  return {
+    type: "ListView",
+    key: "grid",
+    columns: { compact: 3, medium: 4, expanded: 6 },
+    items: items.map((it, i) => posterCard(it, "g" + i + "-")),
+  };
+}
+
+function chipsRow(state) {
+  return {
+    type: "SingleChildScrollView",
+    key: "fuenteScroll",
+    direction: "horizontal",
+    padding: 8,
+    children: [
+      {
+        type: "Chips",
+        key: "fuente",
+        options: SITES.map((s) => ({ value: s.id, label: s.name, labelEn: s.name })),
+        value: siteDe(state).id,
+        onChanged: { event: "fuenteSel" },
+      },
+    ],
+  };
+}
+
+function filaError(mensaje, evento) {
+  return {
+    type: "Card",
+    key: "err-" + evento + "-" + skelSeq++,
+    padding: 12,
+    gap: 8,
+    children: [
+      {
+        type: "Row",
+        gap: 8,
+        crossAxisAlignment: "center",
+        children: [
+          { type: "Icon", name: "wifi_off", color: "muted" },
+          {
+            type: "Text",
+            text: mensaje,
+            textEn: mensaje,
+            color: "muted",
+            style: "caption",
+            flex: 1,
+          },
+          {
+            type: "TextButton",
+            key: "retry-" + evento,
+            labelText: "Reintentar",
+            labelTextEn: "Retry",
+            onPressed: { event: evento },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function railSection(state, sec) {
+  const cats = state.cats || {};
+  const cat = cats[sec.key] || null;
+  if (!cat) {
+    const sk = [];
+    for (let i = 0; i < 6; i++) {
+      sk.push({
+        type: "Card",
+        key: sec.key + "sk" + i,
+        flush: true,
+        children: [{ type: "Skeleton", shape: "block", width: 120, height: 180 }],
+      });
+    }
+    return [
+      {
+        type: "Text",
+        text: sec.label,
+        textEn: sec.labelEn || sec.label,
+        style: "h3",
+        padding: 16,
+      },
+      {
+        type: "SingleChildScrollView",
+        key: sec.key + "skr",
+        direction: "horizontal",
+        padding: 16,
+        children: [{ type: "Row", gap: 8, children: sk }],
+      },
+    ];
+  }
+  const items = Array.isArray(cat.items) ? cat.items : [];
+  if (cat.error && !items.length) {
+    return [
+      {
+        type: "Text",
+        text: sec.label,
+        textEn: sec.labelEn || sec.label,
+        style: "h3",
+        padding: 16,
+      },
+      filaError("No se pudo cargar esta sección.", "reintentarSeccion"),
+    ];
+  }
+  if (!items.length) return [];
+  const cards = items.slice(0, 18).map((it, i) => posterCard(it, sec.key + i + "-"));
+  return [
+    {
+      type: "Text",
+      text: sec.label,
+      textEn: sec.labelEn || sec.label,
+      style: "h3",
+      padding: 16,
+    },
+    {
+      type: "SingleChildScrollView",
+      key: "r-" + sec.key,
+      direction: "horizontal",
+      padding: 16,
+      children: [{ type: "Row", gap: 8, children: cards }],
+    },
+  ];
+}
+
 function tabBody(state) {
   const tab = state.tab || "inicio";
   if (tab === "favoritos") {
@@ -730,21 +684,15 @@ function tabBody(state) {
     return {
       type: "Column",
       children: [
-        fuenteChips(state),
-        {
-          type: "Expanded",
-          child: favs.length
-            ? gridOf(favs, "fav")
-            : {
-                type: "Center",
-                child: {
-                  type: "Text",
-                  text: "Sin favoritos aún",
-                  textEn: "No favorites yet",
-                  style: { color: "#888" },
-                },
-              },
-        },
+        chipsRow(state),
+        favs.length
+          ? titleGridOf(favs)
+          : {
+              type: "emptyState",
+              icon: "heart",
+              title: "Marca galerías con el corazón para verlas aquí.",
+              titleEn: "Mark galleries with the heart to see them here.",
+            },
       ],
     };
   }
@@ -753,189 +701,251 @@ function tabBody(state) {
     return {
       type: "Column",
       children: [
-        fuenteChips(state),
-        {
-          type: "Expanded",
-          child: hist.length
-            ? gridOf(hist, "hist")
-            : {
-                type: "Center",
-                child: {
-                  type: "Text",
-                  text: "Historial vacío",
-                  textEn: "Empty history",
-                  style: { color: "#888" },
-                },
-              },
-        },
+        chipsRow(state),
+        hist.length
+          ? titleGridOf(hist)
+          : {
+              type: "emptyState",
+              icon: "schedule",
+              title: "Todavía no has visto nada.",
+              titleEn: "You have not viewed anything yet.",
+            },
       ],
     };
   }
   if (tab === "biblioteca") {
-    const items = state.libItems;
+    if (state.libError) {
+      return {
+        type: "Column",
+        children: [
+          chipsRow(state),
+          filaError("No se pudo cargar la biblioteca.", "reintentarLib"),
+        ],
+      };
+    }
+    const items = Array.isArray(state.libItems) ? state.libItems : null;
     return {
       type: "Column",
       children: [
-        fuenteChips(state),
-        {
-          type: "Expanded",
-          child: items
-            ? gridOf(items, "lib")
-            : state.libError
-            ? errorTree("Error al cargar la biblioteca", "reloadLib")
-            : skeletonGrid(12),
-        },
+        chipsRow(state),
+        items ? titleGridOf(items) : skelGrid(12),
       ],
     };
   }
   // inicio
   const site = siteDe(state);
-  const cats = state.cats || {};
-  const children = [fuenteChips(state)];
+  const secciones = [];
   for (const sec of site.sections) {
-    const block = cats[sec.key];
-    children.push(
-      sectionBlock(
-        sec.label,
-        block && block.items,
-        sec.key,
-        !block || block.loading
-      )
-    );
+    const nodes = railSection(state, sec);
+    for (let i = 0; i < nodes.length; i++) secciones.push(nodes[i]);
   }
   return {
     type: "SingleChildScrollView",
-    child: { type: "Column", crossAxisAlignment: "start", children: children },
+    key: "homeScroll",
+    children: [
+      {
+        type: "Column",
+        children: [chipsRow(state)].concat(secciones),
+      },
+    ],
   };
 }
 
-// ─── detail / reader ───────────────────────────────────────────────────
+function loadingTree(msg) {
+  return {
+    type: "Column",
+    padding: 32,
+    gap: 12,
+    crossAxisAlignment: "center",
+    children: [
+      { type: "CircularProgressIndicator" },
+      {
+        type: "Text",
+        text: msg || "Cargando…",
+        textEn: "Loading…",
+        color: "muted",
+      },
+    ],
+  };
+}
+
 function detailLoadingTree(d) {
+  const info = (d && d.id && CARDINFO[d.id]) || {};
+  const title = (d && d.meta && d.meta.title) || info.title || "Cargando…";
+  const poster = (d && d.meta && d.meta.poster) || info.poster || "";
   return {
     type: "Scaffold",
+    every: { ms: 600, event: "cargarDetail" },
     appBar: {
-      title: d.meta && d.meta.title ? d.meta.title : "Cargando…",
+      title: title,
       leading: {
         type: "IconButton",
+        key: "backHome",
         icon: "arrow_back",
-        onPressed: { event: "back" },
+        labelText: "Atrás",
+        labelTextEn: "Back",
+        onPressed: { event: "popBack" },
       },
-    },
-    body: {
-      type: "Center",
-      child: { type: "CircularProgressIndicator" },
-    },
-  };
-}
-
-async function detailTree(state) {
-  const d = state.detail;
-  if (!d) return detailLoadingTree({ meta: {} });
-  if (d.loading) return detailLoadingTree(d);
-  const pages = d.pages || [];
-  const fav = isFav(d.id || d.slug);
-  return {
-    type: "Scaffold",
-    appBar: {
-      title: d.meta && d.meta.title ? d.meta.title : d.slug,
-      leading: {
-        type: "IconButton",
-        icon: "arrow_back",
-        onPressed: { event: "back" },
-      },
-      actions: [
-        {
-          type: "IconButton",
-          icon: fav ? "favorite" : "favorite_border",
-          onPressed: { event: "toggleFav" },
-        },
-      ],
+      actions: [],
     },
     body: {
       type: "SingleChildScrollView",
-      padding: 16,
-      child: {
-        type: "Column",
-        crossAxisAlignment: "start",
-        children: [
-          d.meta && d.meta.poster
-            ? {
-                type: "Center",
-                child: {
-                  type: "ClipRRect",
-                  borderRadius: 10,
-                  child: {
-                    type: "Image",
-                    url: d.meta.poster,
-                    width: 220,
-                    fit: "cover",
-                    adult: true,
-                  },
-                },
-              }
-            : { type: "SizedBox", height: 1 },
-          {
-            type: "Padding",
-            padding: { top: 16, bottom: 8 },
-            child: {
-              type: "Text",
-              text: d.meta && d.meta.title ? d.meta.title : d.slug,
-              style: { fontSize: 18, fontWeight: "w600" },
-            },
-          },
-          {
-            type: "Text",
-            text:
-              pages.length +
-              " fotos" +
-              (d.capped ? " (máx. " + PAGES_MAX + ")" : ""),
-            style: { color: "#aaa", fontSize: 13 },
-          },
-          {
-            type: "Padding",
-            padding: { top: 20 },
-            child: {
-              type: "FilledButton",
-              child: {
-                type: "Text",
-                text: pages.length ? "Ver galería" : "Sin imágenes",
-                textEn: pages.length ? "View gallery" : "No images",
-              },
-              onPressed: pages.length
-                ? { event: "openRead" }
-                : { event: "noop" },
-            },
-          },
-          pages.length
-            ? {
-                type: "Padding",
-                padding: { top: 24 },
-                child: {
-                  type: "Wrap",
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: pages.slice(0, 12).map((u, i) => ({
-                    type: "ClipRRect",
-                    borderRadius: 6,
-                    child: {
+      key: "detailLoading",
+      children: [
+        {
+          type: "Column",
+          children: [
+            {
+              type: "Row",
+              gap: 16,
+              padding: 16,
+              crossAxisAlignment: "start",
+              children: [
+                poster
+                  ? {
                       type: "Image",
-                      url: u,
-                      width: 72,
-                      height: 96,
-                      fit: "cover",
-                      adult: true,
-                    },
-                  })),
+                      url: poster,
+                      width: { compact: 120, expanded: 160 },
+                      aspect: "2:3",
+                      alt: title,
+                      fallback: { type: "Skeleton", shape: "block" },
+                    }
+                  : { type: "Skeleton", shape: "block", width: 120, height: 180 },
+                {
+                  type: "Column",
+                  gap: 8,
+                  flex: 1,
+                  children: [
+                    { type: "Skeleton", shape: "line" },
+                    { type: "Skeleton", shape: "line" },
+                    { type: "Skeleton", shape: "line" },
+                  ],
                 },
-              }
-            : { type: "SizedBox", height: 1 },
-        ],
-      },
+              ],
+            },
+          ],
+        },
+      ],
     },
   };
 }
 
-async function readerTree(state) {
+function detailTree(state) {
+  const d = state.detail;
+  if (!d) return detailLoadingTree({});
+  if (d.loading) return detailLoadingTree(d);
+  const pages = d.pages || [];
+  const fav = isFav(d.id);
+  const title = (d.meta && d.meta.title) || d.slug || "";
+  const poster = (d.meta && d.meta.poster) || "";
+  return {
+    type: "Scaffold",
+    appBar: {
+      title: title,
+      leading: {
+        type: "IconButton",
+        key: "backHome",
+        icon: "arrow_back",
+        labelText: "Atrás",
+        labelTextEn: "Back",
+        onPressed: { event: "popBack" },
+      },
+      actions: [],
+    },
+    body: {
+      type: "SingleChildScrollView",
+      key: "detailBody",
+      children: [
+        {
+          type: "Row",
+          gap: 16,
+          padding: 16,
+          crossAxisAlignment: "start",
+          stackOnNarrow: true,
+          children: [
+            poster
+              ? {
+                  type: "Image",
+                  url: poster,
+                  width: { compact: 120, expanded: 160 },
+                  aspect: "2:3",
+                  alt: title,
+                  fallback: { type: "Skeleton", shape: "block" },
+                }
+              : {
+                  type: "Column",
+                  padding: 16,
+                  children: [{ type: "Icon", name: "image", color: "muted" }],
+                },
+            {
+              type: "Column",
+              gap: 6,
+              flex: 2,
+              crossAxisAlignment: "start",
+              children: [
+                { type: "Text", text: title, style: "h2" },
+                { type: "Badge", key: "adult", text: "18+" },
+                {
+                  type: "Text",
+                  text:
+                    pages.length +
+                    " fotos" +
+                    (d.capped ? " (máx. " + PAGES_MAX + ")" : ""),
+                  textEn: pages.length + " photos",
+                  color: "muted",
+                  style: "caption",
+                },
+                {
+                  type: "Row",
+                  key: "filaLeer",
+                  gap: 8,
+                  children: [
+                    {
+                      type: "ElevatedButton",
+                      key: "leer",
+                      icon: "photo_library",
+                      labelText: pages.length ? "Ver galería" : "Sin imágenes",
+                      labelTextEn: pages.length ? "View gallery" : "No images",
+                      flex: 1,
+                      onPressed: pages.length
+                        ? { event: "openRead" }
+                        : { event: "noop" },
+                    },
+                    {
+                      type: "ElevatedButton",
+                      key: "fav",
+                      icon: fav ? "favorite" : "favorite_border",
+                      labelText: fav ? "Quitar" : "Favorito",
+                      labelTextEn: fav ? "Remove" : "Favorite",
+                      onPressed: { event: "toggleFav" },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function pagesDisponible() {
+  try {
+    return (
+      typeof kino === "object" &&
+      kino !== null &&
+      typeof kino.screen === "object" &&
+      kino.screen !== null &&
+      Array.isArray(kino.screen.widgets) &&
+      kino.screen.widgets.indexOf("pages") >= 0
+    );
+  } catch (e) {
+    return false;
+  }
+}
+
+function readerTree(state) {
   const d = state.detail;
   const pages = (d && d.pages) || [];
   if (!pages.length) {
@@ -945,65 +955,86 @@ async function readerTree(state) {
         title: "Galería",
         leading: {
           type: "IconButton",
+          key: "backDet",
           icon: "arrow_back",
-          onPressed: { event: "backDetail" },
+          onPressed: { event: "popBack" },
         },
       },
-      body: errorTree("No hay imágenes en esta galería", null),
-    };
-  }
-  // use pages widget if available (apiVersion 14+)
-  const hasPages =
-    typeof kino.screen === "object" &&
-    kino.screen !== null &&
-    Array.isArray(kino.screen.widgets) &&
-    kino.screen.widgets.indexOf("pages") >= 0;
-
-  if (hasPages) {
-    return {
-      type: "Scaffold",
       body: {
-        type: "Pages",
-        key: "reader",
-        urls: pages,
-        adult: true,
-        onClose: { event: "backDetail" },
+        type: "emptyState",
+        icon: "image",
+        title: "No hay imágenes en esta galería",
+        titleEn: "No images in this gallery",
       },
     };
   }
-  // fallback vertical list
+  if (pagesDisponible() && pages.length >= 2 && pages.length <= 250) {
+    return {
+      type: "Scaffold",
+      appBar: {
+        title: (d.meta && d.meta.title) || "Galería",
+        leading: {
+          type: "IconButton",
+          key: "backDet",
+          icon: "arrow_back",
+          onPressed: { event: "popBack" },
+        },
+      },
+      body: {
+        type: "pages",
+        key: "reader",
+        items: pages.map((u, i) => ({
+          type: "Image",
+          key: "p" + i,
+          url: typeof u === "string" ? u : u.url,
+          fill: true,
+          fit: "width",
+          aspect: "2:3",
+          alt: "Foto " + (i + 1),
+        })),
+      },
+    };
+  }
+  // modo tira
+  const kids = pages.map((u, i) => ({
+    type: "Image",
+    key: "p" + i,
+    url: typeof u === "string" ? u : u.url,
+    fill: true,
+    fit: "width",
+    aspect: "2:3",
+    alt: "Foto " + (i + 1),
+  }));
+  kids.push({
+    type: "Column",
+    padding: 24,
+    gap: 8,
+    children: [
+      {
+        type: "ElevatedButton",
+        key: "finBack",
+        icon: "arrow_back",
+        labelText: "Volver al detalle",
+        labelTextEn: "Back to details",
+        onPressed: { event: "popBack" },
+      },
+    ],
+  });
   return {
     type: "Scaffold",
     appBar: {
       title: (d.meta && d.meta.title) || "Galería",
       leading: {
         type: "IconButton",
+        key: "backDet",
         icon: "arrow_back",
-        onPressed: { event: "backDetail" },
+        onPressed: { event: "popBack" },
       },
     },
     body: {
       type: "ListView",
-      children: pages.map((u, i) => ({
-        type: "Padding",
-        padding: { bottom: 4 },
-        child: {
-          type: "Image",
-          url: u,
-          fit: "contain",
-          adult: true,
-        },
-      })).concat([
-        {
-          type: "Padding",
-          padding: 24,
-          child: {
-            type: "FilledButton",
-            child: { type: "Text", text: "Volver al detalle", textEn: "Back to detail" },
-            onPressed: { event: "backDetail" },
-          },
-        },
-      ]),
+      key: "tira",
+      items: kids,
     },
   };
 }
@@ -1016,34 +1047,35 @@ function searchTree(state) {
       titleEn: "Search",
       leading: {
         type: "IconButton",
+        key: "backHome",
         icon: "arrow_back",
-        onPressed: { event: "back" },
+        onPressed: { event: "popBack" },
       },
     },
     body: {
       type: "Column",
       children: [
         {
-          type: "Padding",
+          type: "Form",
+          key: "searchForm",
           padding: 12,
-          child: {
-            type: "TextField",
-            key: "q",
-            decoration: {
-              hintText: "Buscar galerías…",
-              hintTextEn: "Search galleries…",
+          children: [
+            {
+              type: "TextField",
+              key: "q",
+              decoration: {
+                hintText: "Buscar galerías…",
+                hintTextEn: "Search galleries…",
+              },
+              onSubmitted: { event: "doSearch" },
             },
-            onSubmitted: { event: "doSearch" },
-          },
+          ],
         },
-        {
-          type: "Expanded",
-          child: state.searchLoading
-            ? skeletonGrid(9)
-            : state.searchError
-            ? errorTree("Error en la búsqueda", "doSearch")
-            : gridOf(state.searchItems || [], "s"),
-        },
+        state.searchLoading
+          ? skelGrid(9)
+          : state.searchError
+          ? filaError("Error en la búsqueda", "doSearch")
+          : titleGridOf(state.searchItems || []),
       ],
     },
   };
@@ -1058,40 +1090,31 @@ export async function screen({ state, route }) {
   try {
     if (r.name === "detail") {
       if (!state.detail || state.detail.loading) {
-        return {
-          type: "Scaffold",
-          every: { ms: 400, event: "cargarDetail" },
-          appBar: {
-            title:
-              (state.detail && state.detail.meta && state.detail.meta.title) ||
-              "Cargando…",
-            leading: {
-              type: "IconButton",
-              icon: "arrow_back",
-              onPressed: { event: "back" },
-            },
-          },
-          body: {
-            type: "Center",
-            child: { type: "CircularProgressIndicator" },
-          },
-        };
+        return detailLoadingTree(state.detail || {});
       }
-      return await detailTree(state);
+      return detailTree(state);
     }
-    if (r.name === "read") return await readerTree(state);
+    if (r.name === "read") return readerTree(state);
     if (r.name === "search") return searchTree(state);
   } catch (e) {
-    return errorTree("No se pudo cargar (" + (e.code || "error") + ").", "retry");
+    return {
+      type: "Scaffold",
+      appBar: { title: "Gallery Hot" },
+      body: filaError(
+        "No se pudo cargar (" + ((e && e.code) || "error") + ").",
+        "retry"
+      ),
+    };
   }
   return {
     type: "Scaffold",
-    every: { ms: 1600, event: "cargarRoot" },
+    every: { ms: 1200, event: "cargarRoot" },
     appBar: {
       title: siteDe(state).name,
       actions: [
         {
           type: "IconButton",
+          key: "goSearch",
           icon: "search",
           labelText: "Buscar",
           labelTextEn: "Search",
@@ -1115,13 +1138,14 @@ export async function screenEvent(ev) {
   const state = ev.state || {};
   try {
     if (name === "open") {
-      if (!state.fuente) {
-        return { state: { fuente: prefFuenteId() } };
-      }
+      if (!state.fuente) return { state: { fuente: prefFuenteId() } };
       return null;
     }
-    if (name === "fuente") {
-      const id = String(ev.arg || ev.value || "");
+    if (name === "fuenteSel" || name === "fuente") {
+      const raw = ev.value != null ? ev.value : ev.arg;
+      const id = String(
+        typeof raw === "string" ? raw : (raw && (raw.fuente || raw.value)) || ""
+      );
       if (!SITES.some((s) => s.id === id)) return null;
       setJson(PREF_SRC, id);
       return {
@@ -1140,13 +1164,13 @@ export async function screenEvent(ev) {
       return { state: { tab: ev.value } };
     }
     if (name === "goSearch") {
-      return { route: { name: "search" }, state: { searchItems: null, searchLoading: false } };
+      return {
+        route: { name: "search" },
+        state: { searchItems: null, searchLoading: false, searchError: false },
+      };
     }
-    if (name === "back") {
+    if (name === "popBack") {
       return { route: { name: "home" } };
-    }
-    if (name === "backDetail") {
-      return { route: { name: "detail" } };
     }
     if (name === "cargarRoot") {
       if (rootEnCarga) return null;
@@ -1166,6 +1190,7 @@ export async function screenEvent(ev) {
             },
           };
         } catch (e) {
+          kino.log("lib", e && e.message);
           return { state: { libError: true } };
         } finally {
           rootEnCarga = false;
@@ -1173,19 +1198,19 @@ export async function screenEvent(ev) {
       }
       if (tab === "inicio") {
         const cats = state.cats || {};
-        for (const sec of site.sections) {
+        for (let i = 0; i < site.sections.length; i++) {
+          const sec = site.sections[i];
           if (!cats[sec.key] || cats[sec.key].error) {
             rootEnCarga = true;
             try {
               const items = await fetchCards(site, sec, 1);
-              const next = Object.assign({}, cats, {
-                [sec.key]: { items: items, loading: false, error: false },
-              });
+              const next = Object.assign({}, cats);
+              next[sec.key] = { items: items, loading: false, error: false };
               return { state: { cats: next } };
             } catch (e) {
-              const next = Object.assign({}, cats, {
-                [sec.key]: { items: [], loading: false, error: true },
-              });
+              kino.log("sec", sec.key + " " + (e && e.message));
+              const next = Object.assign({}, cats);
+              next[sec.key] = { items: [], loading: false, error: true };
               return { state: { cats: next } };
             } finally {
               rootEnCarga = false;
@@ -1195,8 +1220,11 @@ export async function screenEvent(ev) {
       }
       return null;
     }
-    if (name === "reloadLib") {
-      return { state: { libItems: null, libError: false } };
+    if (name === "reintentarLib" || name === "retry") {
+      return { state: { libItems: null, libError: false, cats: {} } };
+    }
+    if (name === "reintentarSeccion") {
+      return { state: { cats: {} } };
     }
     if (name === "openDetail") {
       const arg = ev.arg || {};
@@ -1211,6 +1239,7 @@ export async function screenEvent(ev) {
         adult: true,
       };
       pushHist(card);
+      rememberCard(card);
       detailEnCarga = null;
       return {
         route: { name: "detail", params: { slug: card.slug, id: card.id } },
@@ -1234,11 +1263,7 @@ export async function screenEvent(ev) {
       detailEnCarga = card.id;
       try {
         const site = siteOfId(card.siteId);
-        const pages = await fetchPages(site, {
-          url: card.url,
-          slug: card.slug,
-        });
-        const capped = pages.length >= PAGES_MAX;
+        const pages = await fetchPages(site, card);
         return {
           state: {
             detail: {
@@ -1249,12 +1274,12 @@ export async function screenEvent(ev) {
               loading: false,
               meta: card.meta,
               pages: pages,
-              capped: capped,
+              capped: pages.length >= PAGES_MAX,
             },
           },
         };
       } catch (e) {
-        kino.log("detail", e.message || e);
+        kino.log("detail", e && e.message);
         return {
           state: {
             detail: Object.assign({}, card, {
@@ -1274,38 +1299,43 @@ export async function screenEvent(ev) {
     if (name === "toggleFav") {
       const d = state.detail;
       if (!d) return null;
-      toggleFav({
+      const card = {
         id: d.id,
         slug: d.slug,
         title: (d.meta && d.meta.title) || d.slug,
         poster: d.meta && d.meta.poster,
         url: d.url,
         siteId: d.siteId,
-      });
-      return { toast: isFav(d.id) ? "Añadido a favoritos" : "Quitado de favoritos" };
+      };
+      toggleFav(card);
+      return {
+        toast: isFav(d.id) ? "Añadido a favoritos" : "Quitado de favoritos",
+      };
     }
     if (name === "doSearch") {
-      const q =
-        (ev.value && String(ev.value).trim()) ||
-        (state.q && String(state.q).trim()) ||
-        "";
+      let q = "";
+      if (ev.value != null) q = String(ev.value).trim();
+      else if (state.q) q = String(state.q).trim();
       if (!q) return null;
       const site = siteDe(state);
       try {
         const items = await fetchCards(site, null, 1, q);
         return {
-          state: { searchItems: items, searchLoading: false, searchError: false, q: q },
+          state: {
+            searchItems: items,
+            searchLoading: false,
+            searchError: false,
+            q: q,
+          },
         };
       } catch (e) {
         return { state: { searchError: true, searchLoading: false } };
       }
     }
-    if (name === "retry") {
-      return { state: { cats: {}, libItems: null, libError: false } };
-    }
+    if (name === "noop") return null;
   } catch (e) {
-    kino.log("event", name + " " + (e.message || e));
-    return { toast: "Error: " + (e.message || "desconocido") };
+    kino.log("event", name + " " + ((e && e.message) || e));
+    return { toast: "Error: " + ((e && e.message) || "desconocido") };
   }
   return null;
 }

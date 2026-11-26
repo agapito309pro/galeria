@@ -3,7 +3,7 @@
   "name": "Gallery Hot",
   "author": "Hotaru Yume",
   "creator": "hotaruyume",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "apiVersion": 14,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -41,5 +41,5 @@
     "icon": "photo_library",
     "adult": true
   },
-  "description": "Galerías de fotos adultas: PornPics, BabeSource, PMateHunter y Poringa. Lector vertical de imágenes con fuentes conmutables."
+  "description": "Galerías de fotos adultas: PornPics, BabeSource, PMateHunter y Poringa. Lector vertical con fuentes conmutables."
 }
