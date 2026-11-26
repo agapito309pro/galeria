@@ -3,7 +3,7 @@
   "name": "Gallery Hot",
   "author": "Hotaru Yume",
   "creator": "hotaruyume",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "apiVersion": 14,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -37,5 +37,5 @@
     "icon": "photo_library",
     "adult": true
   },
-  "description": "Galerías adultas con buscador. Toca un álbum y ve todas las fotos en tira. PornPics, BabeSource, PMateHunter."
+  "description": "Galerías adultas: PornPics, Hentai/Anime, BabeSource, PMateHunter. Busca, abre álbum sin anuncios y botón al navegador."
 }

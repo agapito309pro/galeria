@@ -40,6 +40,17 @@ const SITES = [
     ],
   },
   {
+    id: "pph",
+    name: "Hentai / Anime",
+    base: "https://www.pornpics.com",
+    homePath: "/es/hentai/",
+    searchPath: (q) => "/es/?q=" + encodeURIComponent(q + " hentai"),
+    sections: [
+      { key: "hentai", label: "Hentai", labelEn: "Hentai", path: "/es/hentai/" },
+      { key: "cosplay", label: "Cosplay", labelEn: "Cosplay", path: "/es/cosplay/" },
+    ],
+  },
+  {
     id: "bs",
     name: "BabeSource",
     base: "https://babesource.com",
@@ -196,25 +207,40 @@ function parsePornPicsList(html, max) {
   return out;
 }
 
-function parsePornPicsPages(html) {
+function parsePornPicsPages(html, card) {
   const pages = [];
   const seen = {};
   const add = (u) => {
     if (!u || seen[u]) return;
+    // solo CDN del álbum — nunca static/ads/1px/tracking
+    if (!/^https?:\/\/cdni\.pornpics\.com\/\d+\//i.test(u)) return;
+    if (/\/1px\.|pixel|banner|ads?\/|promo|sprite|logo/i.test(u)) return;
     seen[u] = true;
     pages.push(u);
   };
+  // id numérico del álbum (final del slug)
+  let gid = "";
+  if (card && card.slug) {
+    const mm = String(card.slug).match(/(\d{6,})$/);
+    if (mm) gid = mm[1];
+  }
+  if (!gid && card && card.url) {
+    const mm = String(card.url).match(/(\d{6,})\/?$/);
+    if (mm) gid = mm[1];
+  }
   let m;
-  // full size 1280
   const reFull =
     /(?:href|src|data-src)=["'](https?:\/\/cdni\.pornpics\.com\/1280\/[^"'\s?]+\.(?:jpe?g|webp))["']/gi;
-  while ((m = reFull.exec(html)) !== null) add(m[1]);
-  // any size → upgrade to 1280
+  while ((m = reFull.exec(html)) !== null) {
+    if (gid && m[1].indexOf("/" + gid + "/") < 0 && m[1].indexOf(gid + "_") < 0) continue;
+    add(m[1]);
+  }
   const reAny =
     /https?:\/\/cdni\.pornpics\.com\/(\d+)\/([^\s"'<>]+\.(?:jpe?g|webp))/gi;
   while ((m = reAny.exec(html)) !== null) {
-    const u = "https://cdni.pornpics.com/1280/" + m[2];
-    add(u);
+    const path = m[2];
+    if (gid && path.indexOf(gid) < 0) continue;
+    add("https://cdni.pornpics.com/1280/" + path);
   }
   return pages.slice(0, PAGES_MAX);
 }
@@ -256,6 +282,9 @@ function parseBabeSourcePages(html) {
   let m;
   while ((m = re.exec(html)) !== null && pages.length < PAGES_MAX) {
     let u = m[1].replace(/\.webp(\?|$)/i, ".jpg$1").split("?")[0];
+    // quitar /thumbs/ → foto completa del álbum (no banners de media.babesource fuera de galleries)
+    if (!/\/galleries\/[a-f0-9]+\//i.test(u)) continue;
+    if (/banner|ads?|promo|logo|sprite|avatar/i.test(u)) continue;
     const full = u.replace(/\/thumbs\//, "/");
     if (!seen[full]) {
       seen[full] = true;
@@ -303,9 +332,11 @@ function parsePmatePages(html) {
   const seen = {};
   let m;
   const re =
-    /(https?:\/\/cdn\.pmatehunter\.com\/content\/[^"'\s,]+?\.(?:jpe?g|webp))/gi;
+    /(https?:\/\/cdn\.pmatehunter\.com\/content\/[^"'\s,]+\.(?:jpe?g|webp))/gi;
   while ((m = re.exec(html)) !== null && pages.length < PAGES_MAX) {
     let u = m[1].split(/\s+/)[0].split("?")[0];
+    if (!/\/content\//i.test(u)) continue;
+    if (/banner|ads?|promo|logo|avatar|sprite/i.test(u)) continue;
     u = u.replace(/_w\d+\./, "_w800.").replace(/_masonry_\d+\./, "_masonry_1200.");
     if (!seen[u]) {
       seen[u] = true;
@@ -384,7 +415,7 @@ async function fetchCards(site, secOrPath, page, q) {
   }
 
   const html = await getHtml(site, path, 22000);
-  if (site.id === "pp") return parsePornPicsList(html, 36);
+  if (site.id === "pp" || site.id === "pph") return parsePornPicsList(html, 36);
   if (site.id === "bs") return parseBabeSourceList(html, 36);
   if (site.id === "pm") return parsePmateList(html, 36);
   return [];
@@ -393,7 +424,7 @@ async function fetchCards(site, secOrPath, page, q) {
 async function fetchPages(site, card) {
   const html = await getHtml(site, card.url, 25000);
   let pages = [];
-  if (site.id === "pp") pages = parsePornPicsPages(html);
+  if (site.id === "pp" || site.id === "pph") pages = parsePornPicsPages(html, card);
   else if (site.id === "bs") pages = parseBabeSourcePages(html);
   else if (site.id === "pm") pages = parsePmatePages(html);
   return pages.slice(0, PAGES_MAX);
@@ -976,37 +1007,63 @@ function paginaFit(p, i, pre) {
 
 function finAlbumNode(r) {
   const n = (r.imgs && r.imgs.length) || 0;
+  const href = r.url && String(r.url).indexOf("https://") === 0 ? r.url : "";
+  const children = [
+    {
+      type: "Row",
+      gap: 8,
+      children: [
+        {
+          type: "IconButton",
+          key: "finBack",
+          icon: "arrow_back",
+          labelText: "Volver",
+          labelTextEn: "Back",
+          onPressed: { event: "popBack" },
+        },
+        {
+          type: "Text",
+          key: "finFin",
+          text: "Fin del álbum · " + n + " fotos",
+          textEn: "End of album · " + n + " photos",
+          style: "caption",
+          color: "muted",
+          flex: 1,
+        },
+      ],
+    },
+  ];
+  if (href) {
+    children.push({
+      type: "Row",
+      gap: 8,
+      mainAxisAlignment: "center",
+      children: [
+        {
+          type: "ElevatedButton",
+          key: "openBrowser",
+          icon: "open_in_new",
+          labelText: "Abrir en navegador",
+          labelTextEn: "Open in browser",
+          onPressed: {
+            go: {
+              url: {
+                href: href,
+                title: (r.title || "Álbum") + " — Gallery Hot",
+              },
+            },
+          },
+        },
+      ],
+    });
+  }
   return {
     type: "Card",
     key: "finCap",
     margin: 16,
     padding: 12,
     gap: 8,
-    children: [
-      {
-        type: "Row",
-        gap: 8,
-        children: [
-          {
-            type: "IconButton",
-            key: "finBack",
-            icon: "arrow_back",
-            labelText: "Volver",
-            labelTextEn: "Back",
-            onPressed: { event: "popBack" },
-          },
-          {
-            type: "Text",
-            key: "finFin",
-            text: "Fin del álbum · " + n + " fotos",
-            textEn: "End of album · " + n + " photos",
-            style: "caption",
-            color: "muted",
-            flex: 1,
-          },
-        ],
-      },
-    ],
+    children: children,
   };
 }
 
@@ -1407,7 +1464,7 @@ export async function screenEvent(ev) {
       }
       const site = siteOfId(siteId) || siteDe(state);
       if (!url && slug) {
-        if (site.id === "pp") url = "https://www.pornpics.com/es/galleries/" + slug + "/";
+        if (site.id === "pp" || site.id === "pph") url = "https://www.pornpics.com/es/galleries/" + slug + "/";
         else if (site.id === "bs") url = site.base + "/galleries/" + slug + ".html";
         else if (site.id === "pm") url = site.base + "/" + slug + "/";
       }
