@@ -739,13 +739,29 @@ function tabBody(state) {
     const nodes = railSection(state, sec);
     for (let i = 0; i < nodes.length; i++) secciones.push(nodes[i]);
   }
+  const searchBar = {
+    type: "Form",
+    key: "homeSearch",
+    padding: 8,
+    children: [
+      {
+        type: "TextField",
+        key: "q",
+        decoration: {
+          hintText: "Buscar álbumes (ej. mia khalifa)…",
+          hintTextEn: "Search albums (e.g. mia khalifa)…",
+        },
+        onSubmitted: { event: "searchGo" },
+      },
+    ],
+  };
   return {
     type: "SingleChildScrollView",
     key: "homeScroll",
     children: [
       {
         type: "Column",
-        children: [chipsRow(state)].concat(secciones),
+        children: [searchBar, chipsRow(state)].concat(secciones),
       },
     ],
   };
@@ -830,6 +846,192 @@ function detailLoadingTree(d) {
   };
 }
 
+
+function pagesDisponible() {
+  try {
+    return (
+      typeof kino === "object" &&
+      kino !== null &&
+      typeof kino.screen === "object" &&
+      kino.screen !== null &&
+      Array.isArray(kino.screen.widgets) &&
+      kino.screen.widgets.indexOf("pages") >= 0
+    );
+  } catch (e) {
+    return false;
+  }
+}
+
+function searchTree(state) {
+  const items = state.results || state.searchItems || null;
+  return {
+    type: "Scaffold",
+    appBar: {
+      title: state.resultsQ
+        ? ("Buscar: " + state.resultsQ)
+        : "Buscar",
+      titleEn: "Search",
+      leading: {
+        type: "IconButton",
+        key: "backHome",
+        icon: "arrow_back",
+        labelText: "Atrás",
+        labelTextEn: "Back",
+        onPressed: { event: "popBack" },
+      },
+    },
+    body: {
+      type: "Column",
+      children: [
+        {
+          type: "Form",
+          key: "searchForm",
+          padding: 12,
+          children: [
+            {
+              type: "TextField",
+              key: "q",
+              value: state.resultsQ || "",
+              decoration: {
+                hintText: "Ej: mia khalifa, riley reid…",
+                hintTextEn: "E.g. mia khalifa, riley reid…",
+              },
+              onSubmitted: { event: "search" },
+            },
+          ],
+        },
+        chipsRow(state),
+        state.searchLoading
+          ? skelGrid(9)
+          : state.searchError
+          ? filaError("Error de conexión en la búsqueda.", "retrySearch")
+          : items
+          ? titleGridOf(
+              items,
+              {
+                type: "emptyState",
+                icon: "search",
+                title: state.resultsQ
+                  ? ("Sin álbumes para «" + state.resultsQ + "»")
+                  : "Escribe un nombre y pulsa buscar",
+                titleEn: "No albums found",
+              }
+            )
+          : {
+              type: "emptyState",
+              icon: "search",
+              title: "Busca un nombre (ej. Mia Khalifa) y elige un álbum.",
+              titleEn: "Search a name and pick an album.",
+            },
+      ],
+    },
+  };
+}
+
+function readerTree(state) {
+  const r = state.reader || {};
+  const pages = r.imgs || (state.detail && state.detail.pages) || [];
+  const title = r.title || (state.detail && state.detail.meta && state.detail.meta.title) || "Álbum";
+
+  if (!pages.length) {
+    return {
+      type: "Scaffold",
+      appBar: {
+        title: title,
+        leading: {
+          type: "IconButton",
+          key: "backDet",
+          icon: "arrow_back",
+          onPressed: { event: "popBack" },
+        },
+      },
+      body: {
+        type: "emptyState",
+        icon: "image",
+        title: "No hay fotos en este álbum",
+        titleEn: "No photos in this album",
+      },
+    };
+  }
+
+  if (pagesDisponible() && pages.length >= 2 && pages.length <= 250) {
+    return {
+      type: "Scaffold",
+      appBar: {
+        title: title + " (" + pages.length + ")",
+        leading: {
+          type: "IconButton",
+          key: "backDet",
+          icon: "arrow_back",
+          onPressed: { event: "popBack" },
+        },
+      },
+      body: {
+        type: "pages",
+        key: "reader",
+        items: pages.map((u, i) => ({
+          type: "Image",
+          key: "p" + i,
+          url: typeof u === "string" ? u : u.url,
+          fill: true,
+          fit: "width",
+          aspect: "2:3",
+          alt: "Foto " + (i + 1),
+        })),
+      },
+    };
+  }
+
+  const kids = pages.map((u, i) => ({
+    type: "Image",
+    key: "p" + i,
+    url: typeof u === "string" ? u : u.url,
+    fill: true,
+    fit: "width",
+    aspect: "2:3",
+    alt: "Foto " + (i + 1),
+  }));
+  kids.push({
+    type: "Column",
+    padding: 24,
+    gap: 8,
+    children: [
+      {
+        type: "Text",
+        text: "Fin del álbum · " + pages.length + " fotos",
+        textEn: "End of album · " + pages.length + " photos",
+        style: "caption",
+        color: "muted",
+      },
+      {
+        type: "ElevatedButton",
+        key: "finBack",
+        icon: "arrow_back",
+        labelText: "Volver",
+        labelTextEn: "Back",
+        onPressed: { event: "popBack" },
+      },
+    ],
+  });
+  return {
+    type: "Scaffold",
+    appBar: {
+      title: title + " (" + pages.length + ")",
+      leading: {
+        type: "IconButton",
+        key: "backDet",
+        icon: "arrow_back",
+        onPressed: { event: "popBack" },
+      },
+    },
+    body: {
+      type: "ListView",
+      key: "tira",
+      items: kids,
+    },
+  };
+}
+
 function detailTree(state) {
   const d = state.detail;
   if (!d) return detailLoadingTree({});
@@ -888,10 +1090,10 @@ function detailTree(state) {
                 {
                   type: "Text",
                   text:
-                    pages.length +
+                    (pages.length || 0) +
                     " fotos" +
                     (d.capped ? " (máx. " + PAGES_MAX + ")" : ""),
-                  textEn: pages.length + " photos",
+                  textEn: (pages.length || 0) + " photos",
                   color: "muted",
                   style: "caption",
                 },
@@ -904,8 +1106,8 @@ function detailTree(state) {
                       type: "ElevatedButton",
                       key: "leer",
                       icon: "photo_library",
-                      labelText: pages.length ? "Ver galería" : "Sin imágenes",
-                      labelTextEn: pages.length ? "View gallery" : "No images",
+                      labelText: pages.length ? "Ver álbum completo" : "Sin fotos",
+                      labelTextEn: pages.length ? "View full album" : "No photos",
                       flex: 1,
                       onPressed: pages.length
                         ? { event: "openRead" }
@@ -930,160 +1132,10 @@ function detailTree(state) {
   };
 }
 
-function pagesDisponible() {
-  try {
-    return (
-      typeof kino === "object" &&
-      kino !== null &&
-      typeof kino.screen === "object" &&
-      kino.screen !== null &&
-      Array.isArray(kino.screen.widgets) &&
-      kino.screen.widgets.indexOf("pages") >= 0
-    );
-  } catch (e) {
-    return false;
-  }
-}
-
-function readerTree(state) {
-  const d = state.detail;
-  const pages = (d && d.pages) || [];
-  if (!pages.length) {
-    return {
-      type: "Scaffold",
-      appBar: {
-        title: "Galería",
-        leading: {
-          type: "IconButton",
-          key: "backDet",
-          icon: "arrow_back",
-          onPressed: { event: "popBack" },
-        },
-      },
-      body: {
-        type: "emptyState",
-        icon: "image",
-        title: "No hay imágenes en esta galería",
-        titleEn: "No images in this gallery",
-      },
-    };
-  }
-  if (pagesDisponible() && pages.length >= 2 && pages.length <= 250) {
-    return {
-      type: "Scaffold",
-      appBar: {
-        title: (d.meta && d.meta.title) || "Galería",
-        leading: {
-          type: "IconButton",
-          key: "backDet",
-          icon: "arrow_back",
-          onPressed: { event: "popBack" },
-        },
-      },
-      body: {
-        type: "pages",
-        key: "reader",
-        items: pages.map((u, i) => ({
-          type: "Image",
-          key: "p" + i,
-          url: typeof u === "string" ? u : u.url,
-          fill: true,
-          fit: "width",
-          aspect: "2:3",
-          alt: "Foto " + (i + 1),
-        })),
-      },
-    };
-  }
-  // modo tira
-  const kids = pages.map((u, i) => ({
-    type: "Image",
-    key: "p" + i,
-    url: typeof u === "string" ? u : u.url,
-    fill: true,
-    fit: "width",
-    aspect: "2:3",
-    alt: "Foto " + (i + 1),
-  }));
-  kids.push({
-    type: "Column",
-    padding: 24,
-    gap: 8,
-    children: [
-      {
-        type: "ElevatedButton",
-        key: "finBack",
-        icon: "arrow_back",
-        labelText: "Volver al detalle",
-        labelTextEn: "Back to details",
-        onPressed: { event: "popBack" },
-      },
-    ],
-  });
-  return {
-    type: "Scaffold",
-    appBar: {
-      title: (d.meta && d.meta.title) || "Galería",
-      leading: {
-        type: "IconButton",
-        key: "backDet",
-        icon: "arrow_back",
-        onPressed: { event: "popBack" },
-      },
-    },
-    body: {
-      type: "ListView",
-      key: "tira",
-      items: kids,
-    },
-  };
-}
-
-function searchTree(state) {
-  return {
-    type: "Scaffold",
-    appBar: {
-      title: "Buscar",
-      titleEn: "Search",
-      leading: {
-        type: "IconButton",
-        key: "backHome",
-        icon: "arrow_back",
-        onPressed: { event: "popBack" },
-      },
-    },
-    body: {
-      type: "Column",
-      children: [
-        {
-          type: "Form",
-          key: "searchForm",
-          padding: 12,
-          children: [
-            {
-              type: "TextField",
-              key: "q",
-              decoration: {
-                hintText: "Buscar galerías…",
-                hintTextEn: "Search galleries…",
-              },
-              onSubmitted: { event: "doSearch" },
-            },
-          ],
-        },
-        state.searchLoading
-          ? skelGrid(9)
-          : state.searchError
-          ? filaError("Error en la búsqueda", "doSearch")
-          : titleGridOf(state.searchItems || []),
-      ],
-    },
-  };
-}
-
 // ─── exports ───────────────────────────────────────────────────────────
 let rootEnCarga = false;
 let detailEnCarga = null;
+let navSeq = 0;
 
 export async function screen({ state, route }) {
   const r = route || { name: "home" };
@@ -1106,11 +1158,12 @@ export async function screen({ state, route }) {
       ),
     };
   }
+  // Home: barra de búsqueda visible + secciones
   return {
     type: "Scaffold",
     every: { ms: 1200, event: "cargarRoot" },
     appBar: {
-      title: siteDe(state).name,
+      title: "Gallery Hot",
       actions: [
         {
           type: "IconButton",
@@ -1156,6 +1209,8 @@ export async function screenEvent(ev) {
           libPage: 1,
           libError: false,
           libDone: false,
+          results: null,
+          resultsQ: "",
         },
         toast: "Fuente: " + siteOfId(id).name,
       };
@@ -1165,13 +1220,75 @@ export async function screenEvent(ev) {
     }
     if (name === "goSearch") {
       return {
-        route: { name: "search" },
-        state: { searchItems: null, searchLoading: false, searchError: false },
+        route: { push: "search" },
+        state: {
+          results: null,
+          searchItems: null,
+          searchLoading: false,
+          searchError: false,
+          resultsQ: "",
+        },
       };
     }
-    if (name === "popBack") {
-      return { route: { name: "home" } };
+    if (name === "popBack" || name === "pop") {
+      return { route: { pop: true } };
     }
+
+    // Buscar desde home → empuja pantalla search con resultados
+    if (name === "searchGo" || name === "search") {
+      const q = String(
+        (ev.value && (ev.value.q || ev.value)) || state.resultsQ || ""
+      ).trim();
+      if (!q) return { toast: "Escribe un nombre para buscar." };
+      const site = siteDe(state);
+      try {
+        const results = await fetchCards(site, null, 1, q);
+        if (name === "searchGo") {
+          return {
+            route: { push: "search" },
+            state: {
+              results: results,
+              resultsQ: q,
+              searchError: false,
+              searchLoading: false,
+            },
+            toast: results.length
+              ? results.length + " álbumes"
+              : "Sin resultados para «" + q + "»",
+          };
+        }
+        return {
+          state: {
+            results: results,
+            resultsQ: q,
+            searchError: false,
+            searchLoading: false,
+          },
+          toast: results.length
+            ? results.length + " álbumes"
+            : "Sin resultados para «" + q + "»",
+        };
+      } catch (e) {
+        kino.log("search", e && e.message);
+        if (name === "searchGo") {
+          return {
+            route: { push: "search" },
+            state: { searchError: true, resultsQ: q, results: [] },
+            toast: "Error de conexión. Inténtalo de nuevo.",
+          };
+        }
+        return {
+          state: { searchError: true, resultsQ: q },
+          toast: "Error de conexión. Inténtalo de nuevo.",
+        };
+      }
+    }
+    if (name === "retrySearch") {
+      return {
+        state: { searchError: false, results: null },
+      };
+    }
+
     if (name === "cargarRoot") {
       if (rootEnCarga) return null;
       const tab = state.tab || "inicio";
@@ -1226,6 +1343,8 @@ export async function screenEvent(ev) {
     if (name === "reintentarSeccion") {
       return { state: { cats: {} } };
     }
+
+    // Tocar álbum → cargar TODAS las fotos y abrir el lector
     if (name === "openDetail") {
       const arg = ev.arg || {};
       const site = siteOfId(arg.siteId) || siteDe(state);
@@ -1238,24 +1357,51 @@ export async function screenEvent(ev) {
         siteId: site.id,
         adult: true,
       };
+      if (!card.url) {
+        return { toast: "Álbum sin enlace." };
+      }
       pushHist(card);
       rememberCard(card);
-      detailEnCarga = null;
-      return {
-        route: { name: "detail", params: { slug: card.slug, id: card.id } },
-        state: {
-          detail: {
-            id: card.id,
-            slug: card.slug,
-            url: card.url,
-            siteId: site.id,
-            loading: true,
-            meta: { title: card.title, poster: card.poster },
-            pages: [],
+      try {
+        const pages = await fetchPages(site, card);
+        if (!pages.length) {
+          return { toast: "No se encontraron fotos en este álbum." };
+        }
+        const reader = {
+          id: card.id,
+          slug: card.slug,
+          title: card.title || card.slug,
+          poster: card.poster,
+          url: card.url,
+          siteId: site.id,
+          imgs: pages,
+          tk: ++navSeq,
+        };
+        return {
+          state: {
+            reader: reader,
+            detail: {
+              id: card.id,
+              slug: card.slug,
+              url: card.url,
+              siteId: site.id,
+              loading: false,
+              meta: { title: card.title, poster: card.poster },
+              pages: pages,
+              capped: pages.length >= PAGES_MAX,
+            },
           },
-        },
-      };
+          route: { push: "read" },
+          toast: pages.length + " fotos",
+        };
+      } catch (e) {
+        kino.log("openDetail", e && e.message);
+        return {
+          toast: "No se pudo abrir el álbum. Inténtalo de nuevo.",
+        };
+      }
     }
+
     if (name === "cargarDetail") {
       const card = state.detail;
       if (!card || !card.loading || !card.url) return null;
@@ -1293,17 +1439,41 @@ export async function screenEvent(ev) {
         detailEnCarga = null;
       }
     }
+
     if (name === "openRead") {
-      return { route: { name: "read" } };
-    }
-    if (name === "toggleFav") {
       const d = state.detail;
       if (!d) return null;
-      const card = {
+      let pages = d.pages || [];
+      if (!pages.length) {
+        try {
+          const site = siteOfId(d.siteId);
+          pages = await fetchPages(site, d);
+        } catch (e) {
+          return { toast: "No se pudieron cargar las fotos." };
+        }
+      }
+      if (!pages.length) return { toast: "No hay fotos en este álbum." };
+      const reader = {
         id: d.id,
         slug: d.slug,
         title: (d.meta && d.meta.title) || d.slug,
         poster: d.meta && d.meta.poster,
+        url: d.url,
+        siteId: d.siteId,
+        imgs: pages,
+        tk: ++navSeq,
+      };
+      return { state: { reader: reader }, route: { push: "read" } };
+    }
+
+    if (name === "toggleFav") {
+      const d = state.detail || state.reader;
+      if (!d) return null;
+      const card = {
+        id: d.id,
+        slug: d.slug,
+        title: (d.meta && d.meta.title) || d.title || d.slug,
+        poster: (d.meta && d.meta.poster) || d.poster,
         url: d.url,
         siteId: d.siteId,
       };
@@ -1311,26 +1481,6 @@ export async function screenEvent(ev) {
       return {
         toast: isFav(d.id) ? "Añadido a favoritos" : "Quitado de favoritos",
       };
-    }
-    if (name === "doSearch") {
-      let q = "";
-      if (ev.value != null) q = String(ev.value).trim();
-      else if (state.q) q = String(state.q).trim();
-      if (!q) return null;
-      const site = siteDe(state);
-      try {
-        const items = await fetchCards(site, null, 1, q);
-        return {
-          state: {
-            searchItems: items,
-            searchLoading: false,
-            searchError: false,
-            q: q,
-          },
-        };
-      } catch (e) {
-        return { state: { searchError: true, searchLoading: false } };
-      }
     }
     if (name === "noop") return null;
   } catch (e) {
