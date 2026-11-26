@@ -209,25 +209,22 @@ function parsePornPicsList(html, max) {
 function parsePornPicsPages(html) {
   const pages = [];
   const seen = {};
+  const add = (u) => {
+    if (!u || seen[u]) return;
+    seen[u] = true;
+    pages.push(u);
+  };
   let m;
+  // full size 1280
   const reFull =
-    /(?:href|src|data-src)=["'](https?:\/\/cdni\.pornpics\.com\/1280\/[^"']+\.(?:jpe?g|webp))["']/gi;
-  while ((m = reFull.exec(html)) !== null) {
-    if (!seen[m[1]]) {
-      seen[m[1]] = true;
-      pages.push(m[1]);
-    }
-  }
-  if (pages.length < 3) {
-    const reThumb =
-      /(?:src|data-src)=["'](https?:\/\/cdni\.pornpics\.com\/)(460)(\/[^"']+\.(?:jpe?g|webp))["']/gi;
-    while ((m = reThumb.exec(html)) !== null) {
-      const u = m[1] + "1280" + m[3];
-      if (!seen[u]) {
-        seen[u] = true;
-        pages.push(u);
-      }
-    }
+    /(?:href|src|data-src)=["'](https?:\/\/cdni\.pornpics\.com\/1280\/[^"'\s?]+\.(?:jpe?g|webp))["']/gi;
+  while ((m = reFull.exec(html)) !== null) add(m[1]);
+  // any size → upgrade to 1280
+  const reAny =
+    /https?:\/\/cdni\.pornpics\.com\/(\d+)\/([^\s"'<>]+\.(?:jpe?g|webp))/gi;
+  while ((m = reAny.exec(html)) !== null) {
+    const u = "https://cdni.pornpics.com/1280/" + m[2];
+    add(u);
   }
   return pages.slice(0, PAGES_MAX);
 }
@@ -463,38 +460,31 @@ function pushHist(card) {
 const CARDINFO = {};
 function rememberCard(it) {
   try {
-    if (it && it.id && CARDINFO[it.id] === undefined) {
-      CARDINFO[it.id] = {
-        title: it.title || "",
-        poster: it.poster || "",
-        s: it.siteId || "",
-        u: it.url || "",
-        slug: it.slug || "",
-      };
-      const ks = Object.keys(CARDINFO);
-      if (ks.length > 300) delete CARDINFO[ks[0]];
-    }
+    if (!it) return;
+    const id = String(it.id || ((it.siteId || "") + ":" + (it.slug || "")));
+    if (!id || id === ":") return;
+    const prev = CARDINFO[id] || {};
+    CARDINFO[id] = {
+      title: it.title || prev.title || "",
+      poster: it.poster || prev.poster || "",
+      s: it.siteId || prev.s || "",
+      u: it.url || prev.u || "",
+      slug: it.slug || prev.slug || "",
+    };
+    const ks = Object.keys(CARDINFO);
+    if (ks.length > 400) delete CARDINFO[ks[0]];
   } catch (e) {}
 }
 
 function posterCard(it, prefix) {
   rememberCard(it);
-  const keySafe = String(it.id || it.slug || "x").replace(/[^a-z0-9:_-]/gi, "-");
+  const id = String(it.id || (it.siteId + ":" + it.slug));
+  const keySafe = id.replace(/[^a-z0-9:_-]/gi, "-");
   return {
     type: "Card",
     key: (prefix || "c") + keySafe,
     flush: true,
-    onTap: {
-      event: "openDetail",
-      arg: {
-        id: it.id,
-        slug: it.slug,
-        siteId: it.siteId,
-        url: it.url,
-        title: it.title,
-        poster: it.poster,
-      },
-    },
+    onTap: { event: "openDetail", arg: id },
     children: [
       {
         type: "Image",
@@ -742,16 +732,26 @@ function tabBody(state) {
   const searchBar = {
     type: "Form",
     key: "homeSearch",
-    padding: 8,
+    onSubmitted: "searchGo",
+    gap: 8,
+    padding: 12,
     children: [
       {
         type: "TextField",
         key: "q",
-        decoration: {
-          hintText: "Buscar álbumes (ej. mia khalifa)…",
-          hintTextEn: "Search albums (e.g. mia khalifa)…",
-        },
-        onSubmitted: { event: "searchGo" },
+        kind: "search",
+        labelText: "Buscar álbum",
+        labelTextEn: "Search album",
+        hintText: "P. ej. mia khalifa",
+        hintEn: "e.g. mia khalifa",
+        required: true,
+      },
+      {
+        type: "ElevatedButton",
+        icon: "search",
+        labelText: "Buscar",
+        labelTextEn: "Search",
+        submit: true,
       },
     ],
   };
@@ -863,14 +863,13 @@ function pagesDisponible() {
 }
 
 function searchTree(state) {
-  const items = state.results || state.searchItems || null;
+  const q = typeof state.resultsQ === "string" ? state.resultsQ : "";
+  const results = Array.isArray(state.results) ? state.results : null;
   return {
     type: "Scaffold",
     appBar: {
-      title: state.resultsQ
-        ? ("Buscar: " + state.resultsQ)
-        : "Buscar",
-      titleEn: "Search",
+      title: "Buscar álbum",
+      titleEn: "Search album",
       leading: {
         type: "IconButton",
         key: "backHome",
@@ -879,50 +878,63 @@ function searchTree(state) {
         labelTextEn: "Back",
         onPressed: { event: "popBack" },
       },
+      actions: [],
     },
     body: {
-      type: "Column",
+      type: "SingleChildScrollView",
+      key: "searchBody",
       children: [
         {
-          type: "Form",
-          key: "searchForm",
-          padding: 12,
+          type: "Column",
           children: [
             {
-              type: "TextField",
-              key: "q",
-              value: state.resultsQ || "",
-              decoration: {
-                hintText: "Ej: mia khalifa, riley reid…",
-                hintTextEn: "E.g. mia khalifa, riley reid…",
-              },
-              onSubmitted: { event: "search" },
+              type: "Form",
+              key: "search",
+              onSubmitted: "search",
+              gap: 8,
+              padding: 16,
+              children: [
+                {
+                  type: "TextField",
+                  key: "q",
+                  kind: "search",
+                  value: q,
+                  labelText: "Nombre",
+                  labelTextEn: "Name",
+                  hintText: "P. ej. mia khalifa",
+                  hintEn: "e.g. mia khalifa",
+                  required: true,
+                },
+                {
+                  type: "ElevatedButton",
+                  icon: "search",
+                  labelText: "Buscar",
+                  labelTextEn: "Search",
+                  submit: true,
+                },
+              ],
             },
-          ],
+            chipsRow(state),
+            state.searchError
+              ? filaError("No se pudo buscar. Comprueba tu conexión.", "retrySearch")
+              : results
+              ? results.length
+                ? titleGridOf(results)
+                : {
+                    type: "emptyState",
+                    icon: "search",
+                    title: "Sin resultados para «" + q + "».",
+                    titleEn: "No results.",
+                  }
+              : {
+                  type: "Text",
+                  text: "Escribe un nombre y pulsa Buscar.",
+                  textEn: "Type a name and press Search.",
+                  color: "muted",
+                  padding: 16,
+                },
+          ].filter(Boolean),
         },
-        chipsRow(state),
-        state.searchLoading
-          ? skelGrid(9)
-          : state.searchError
-          ? filaError("Error de conexión en la búsqueda.", "retrySearch")
-          : items
-          ? titleGridOf(
-              items,
-              {
-                type: "emptyState",
-                icon: "search",
-                title: state.resultsQ
-                  ? ("Sin álbumes para «" + state.resultsQ + "»")
-                  : "Escribe un nombre y pulsa buscar",
-                titleEn: "No albums found",
-              }
-            )
-          : {
-              type: "emptyState",
-              icon: "search",
-              title: "Busca un nombre (ej. Mia Khalifa) y elige un álbum.",
-              titleEn: "Search a name and pick an album.",
-            },
       ],
     },
   };
@@ -1236,9 +1248,7 @@ export async function screenEvent(ev) {
 
     // Buscar desde home → empuja pantalla search con resultados
     if (name === "searchGo" || name === "search") {
-      const q = String(
-        (ev.value && (ev.value.q || ev.value)) || state.resultsQ || ""
-      ).trim();
+      const q = String((ev.value && ev.value.q) || (ev.value && typeof ev.value === "string" ? ev.value : "") || "").trim();
       if (!q) return { toast: "Escribe un nombre para buscar." };
       const site = siteDe(state);
       try {
@@ -1283,7 +1293,7 @@ export async function screenEvent(ev) {
         };
       }
     }
-    if (name === "retrySearch") {
+    if (name === "retrySearch")    if (name === "retrySearch") {
       return {
         state: { searchError: false, results: null },
       };
@@ -1346,22 +1356,41 @@ export async function screenEvent(ev) {
 
     // Tocar álbum → cargar TODAS las fotos y abrir el lector
     if (name === "openDetail") {
-      const arg = ev.arg || {};
-      const site = siteOfId(arg.siteId) || siteDe(state);
+      // arg = id string (pp:slug) — los objetos no viajan bien en onTap
+      const id = String(ev.arg || "").trim();
+      const info = CARDINFO[id] || {};
+      let siteId = info.s || siteDe(state).id;
+      let slug = info.slug || "";
+      let url = info.u || "";
+      let title = info.title || "";
+      let poster = info.poster || "";
+      if (!slug && id.indexOf(":") > 0) {
+        const parts = id.split(":");
+        siteId = parts[0];
+        slug = parts.slice(1).join(":");
+      }
+      const site = siteOfId(siteId) || siteDe(state);
+      if (!url && slug) {
+        if (site.id === "pp") url = "https://www.pornpics.com/es/galleries/" + slug + "/";
+        else if (site.id === "bs") url = site.base + "/galleries/" + slug + ".html";
+        else if (site.id === "pm") url = site.base + "/" + slug + "/";
+        else if (site.id === "po") url = site.base + "/posts/" + slug;
+      }
+      if (!url) {
+        return { toast: "Álbum no encontrado. Vuelve a cargar el listado." };
+      }
       const card = {
-        id: arg.id || site.id + ":" + arg.slug,
-        slug: arg.slug,
-        url: arg.url,
-        title: arg.title,
-        poster: arg.poster,
+        id: id || site.id + ":" + slug,
+        slug: slug,
+        url: url,
+        title: title || slug,
+        poster: poster,
         siteId: site.id,
         adult: true,
       };
-      if (!card.url) {
-        return { toast: "Álbum sin enlace." };
-      }
       pushHist(card);
       rememberCard(card);
+      // feedback inmediato
       try {
         const pages = await fetchPages(site, card);
         if (!pages.length) {
@@ -1370,7 +1399,7 @@ export async function screenEvent(ev) {
         const reader = {
           id: card.id,
           slug: card.slug,
-          title: card.title || card.slug,
+          title: card.title,
           poster: card.poster,
           url: card.url,
           siteId: site.id,
@@ -1397,12 +1426,12 @@ export async function screenEvent(ev) {
       } catch (e) {
         kino.log("openDetail", e && e.message);
         return {
-          toast: "No se pudo abrir el álbum. Inténtalo de nuevo.",
+          toast: "No se pudo abrir el álbum: " + ((e && e.message) || "error"),
         };
       }
     }
 
-    if (name === "cargarDetail") {
+    if (name === "cargarDetail")    if (name === "cargarDetail") {
       const card = state.detail;
       if (!card || !card.loading || !card.url) return null;
       if (detailEnCarga === card.id) return null;

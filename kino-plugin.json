@@ -3,7 +3,7 @@
   "name": "Gallery Hot",
   "author": "Hotaru Yume",
   "creator": "hotaruyume",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "apiVersion": 14,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -41,5 +41,5 @@
     "icon": "photo_library",
     "adult": true
   },
-  "description": "Galerías adultas: busca (ej. mia khalifa), elige álbum y ve todas las fotos. PornPics, BabeSource, PMateHunter, Poringa."
+  "description": "Galerías adultas con buscador (mia khalifa…). Toca un álbum y ve todas las fotos. PornPics, BabeSource, PMateHunter, Poringa."
 }
