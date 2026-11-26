@@ -1,0 +1,45 @@
+{
+  "id": "gallery-hot",
+  "name": "Gallery Hot",
+  "author": "Hotaru Yume",
+  "creator": "hotaruyume",
+  "version": "1.0.0",
+  "apiVersion": 14,
+  "entry": "plugin.js",
+  "icon": "icon.png",
+  "hosts": [
+    "pornpics.com",
+    "www.pornpics.com",
+    "cdni.pornpics.com",
+    "static.pornpics.com",
+    "babesource.com",
+    "www.babesource.com",
+    "media.babesource.com",
+    "pmatehunter.com",
+    "www.pmatehunter.com",
+    "cdn.pmatehunter.com",
+    "poringa.net",
+    "www.poringa.net",
+    "s2.poringa.net",
+    "m.poringa.net"
+  ],
+  "capabilities": [
+    "screen",
+    "shared"
+  ],
+  "categories": [
+    "adult"
+  ],
+  "screen": {
+    "label": "Gallery Hot",
+    "labelEn": "Gallery Hot",
+    "menuOpens": "screen",
+    "opensFrom": [
+      "menu",
+      "settings"
+    ],
+    "icon": "photo_library",
+    "adult": true
+  },
+  "description": "Galerías de fotos adultas: PornPics, BabeSource, PMateHunter y Poringa. Lector vertical de imágenes con fuentes conmutables."
+}
