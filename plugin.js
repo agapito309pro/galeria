@@ -31,6 +31,8 @@ const SITES = [
     sections: [
       { key: "recent", label: "Recientes", labelEn: "Recent", path: "/es/recent/" },
       { key: "popular", label: "Populares", labelEn: "Popular", path: "/es/popular/" },
+      { key: "hentai", label: "Hentai", labelEn: "Hentai", path: "/es/hentai/" },
+      { key: "anime", label: "Anime / Cosplay", labelEn: "Anime / Cosplay", path: "/es/cosplay/" },
       { key: "milf", label: "MILF", labelEn: "MILF", path: "/es/milf/" },
       { key: "big-tits", label: "Grandes tetas", labelEn: "Big Tits", path: "/es/big-tits/" },
       { key: "amateur", label: "Amateur", labelEn: "Amateur", path: "/es/amateur/" },
@@ -40,14 +42,28 @@ const SITES = [
     ],
   },
   {
-    id: "pph",
-    name: "Hentai / Anime",
-    base: "https://www.pornpics.com",
-    homePath: "/es/hentai/",
-    searchPath: (q) => "/es/?q=" + encodeURIComponent(q + " hentai"),
+    id: "hp",
+    name: "Hentai Pictures",
+    base: "https://hentai.pictures",
+    homePath: "/popular",
+    searchPath: (q) => "/search?q=" + encodeURIComponent(q),
     sections: [
-      { key: "hentai", label: "Hentai", labelEn: "Hentai", path: "/es/hentai/" },
-      { key: "cosplay", label: "Cosplay", labelEn: "Cosplay", path: "/es/cosplay/" },
+      { key: "popular", label: "Populares", labelEn: "Popular", path: "/popular" },
+      { key: "home", label: "Recientes", labelEn: "Recent", path: "/" },
+      { key: "genshin", label: "Genshin", labelEn: "Genshin", path: "/category/genshin-impact" },
+      { key: "naruto", label: "Naruto", labelEn: "Naruto", path: "/category/naruto" },
+      { key: "pokemon", label: "Pokémon", labelEn: "Pokémon", path: "/category/pokemon" },
+    ],
+  },
+  {
+    id: "ev",
+    name: "Everia (Photobooks)",
+    base: "https://everia.club",
+    homePath: "/",
+    searchPath: (q) => "/?s=" + encodeURIComponent(q),
+    sections: [
+      { key: "home", label: "Recientes", labelEn: "Recent", path: "/" },
+      { key: "page2", label: "Más", labelEn: "More", path: "/page/2/" },
     ],
   },
   {
@@ -210,15 +226,6 @@ function parsePornPicsList(html, max) {
 function parsePornPicsPages(html, card) {
   const pages = [];
   const seen = {};
-  const add = (u) => {
-    if (!u || seen[u]) return;
-    // solo CDN del álbum — nunca static/ads/1px/tracking
-    if (!/^https?:\/\/cdni\.pornpics\.com\/\d+\//i.test(u)) return;
-    if (/\/1px\.|pixel|banner|ads?\/|promo|sprite|logo/i.test(u)) return;
-    seen[u] = true;
-    pages.push(u);
-  };
-  // id numérico del álbum (final del slug)
   let gid = "";
   if (card && card.slug) {
     const mm = String(card.slug).match(/(\d{6,})$/);
@@ -228,19 +235,32 @@ function parsePornPicsPages(html, card) {
     const mm = String(card.url).match(/(\d{6,})\/?$/);
     if (mm) gid = mm[1];
   }
+  // Solo miniaturas del álbum (data-src) que llevan el ID numérico —
+  // evita relacionados y assets estáticos.
+  const re =
+    /data-src=["'](https?:\/\/cdni\.pornpics\.com\/\d+\/[^"']+)["']/gi;
   let m;
-  const reFull =
-    /(?:href|src|data-src)=["'](https?:\/\/cdni\.pornpics\.com\/1280\/[^"'\s?]+\.(?:jpe?g|webp))["']/gi;
-  while ((m = reFull.exec(html)) !== null) {
-    if (gid && m[1].indexOf("/" + gid + "/") < 0 && m[1].indexOf(gid + "_") < 0) continue;
-    add(m[1]);
+  while ((m = re.exec(html)) !== null) {
+    let u = m[1].split("?")[0];
+    if (gid && u.indexOf(gid) < 0) continue;
+    if (/\/1px\.|pixel|banner|ads?\/|promo|sprite|logo/i.test(u)) continue;
+    // subir a 1280 solo cambiando el segmento de tamaño
+    u = u.replace(/cdni\.pornpics\.com\/\d+\//, "cdni.pornpics.com/1280/");
+    if (seen[u]) continue;
+    seen[u] = true;
+    pages.push(u);
   }
-  const reAny =
-    /https?:\/\/cdni\.pornpics\.com\/(\d+)\/([^\s"'<>]+\.(?:jpe?g|webp))/gi;
-  while ((m = reAny.exec(html)) !== null) {
-    const path = m[2];
-    if (gid && path.indexOf(gid) < 0) continue;
-    add("https://cdni.pornpics.com/1280/" + path);
+  // respaldo: href a 1280 del mismo gid
+  if (pages.length < 2) {
+    const re2 =
+      /(?:href|src)=["'](https?:\/\/cdni\.pornpics\.com\/1280\/[^"']+\.(?:jpe?g|webp))["']/gi;
+    while ((m = re2.exec(html)) !== null) {
+      const u = m[1].split("?")[0];
+      if (gid && u.indexOf(gid) < 0) continue;
+      if (seen[u]) continue;
+      seen[u] = true;
+      pages.push(u);
+    }
   }
   return pages.slice(0, PAGES_MAX);
 }
@@ -275,21 +295,36 @@ function parseBabeSourceList(html, max) {
 }
 
 function parseBabeSourcePages(html) {
+  // Contar hashes: el más frecuente es el álbum actual; el resto son
+  // «related» (otras galerías → huecos/anuncios si se mezclan).
+  const counts = {};
+  const reHash = /media\.babesource\.com\/galleries\/([a-f0-9]+)\//gi;
+  let m;
+  while ((m = reHash.exec(html)) !== null) {
+    counts[m[1]] = (counts[m[1]] || 0) + 1;
+  }
+  let main = "";
+  let best = 0;
+  for (const h in counts) {
+    if (counts[h] > best) {
+      best = counts[h];
+      main = h;
+    }
+  }
+  if (!main) return [];
   const pages = [];
   const seen = {};
   const re =
-    /(?:src|data-src|href)=["'](https?:\/\/media\.babesource\.com\/galleries\/[a-f0-9]+\/(?:thumbs\/)?[^"']+\.(?:jpe?g|webp)[^"']*)["']/gi;
-  let m;
+    /(?:src|data-src|href)=["'](https?:\/\/media\.babesource\.com\/galleries\/([a-f0-9]+)\/[^"']+\.(?:jpe?g|webp)[^"']*)["']/gi;
   while ((m = re.exec(html)) !== null && pages.length < PAGES_MAX) {
+    if (m[2] !== main) continue;
     let u = m[1].replace(/\.webp(\?|$)/i, ".jpg$1").split("?")[0];
-    // quitar /thumbs/ → foto completa del álbum (no banners de media.babesource fuera de galleries)
-    if (!/\/galleries\/[a-f0-9]+\//i.test(u)) continue;
-    if (/banner|ads?|promo|logo|sprite|avatar/i.test(u)) continue;
-    const full = u.replace(/\/thumbs\//, "/");
-    if (!seen[full]) {
-      seen[full] = true;
-      pages.push(full);
-    }
+    if (/banner|ads?|promo|logo|sprite|avatar|misc\//i.test(u)) continue;
+    // preferir ruta sin /thumbs/ y sin 300x406
+    u = u.replace(/\/thumbs\//, "/").replace(/\/300x406\//, "/");
+    if (seen[u]) continue;
+    seen[u] = true;
+    pages.push(u);
   }
   return pages;
 }
@@ -345,6 +380,126 @@ function parsePmatePages(html) {
   }
   return pages;
 }
+
+function parseHentaiPicturesList(html, max) {
+  const out = [];
+  const seen = {};
+  const skip = {
+    popular: 1, categories: 1, tags: 1, category: 1, search: 1,
+    login: 1, signup: 1, about: 1, contact: 1, privacy: 1, terms: 1,
+  };
+  const re =
+    /href=["'](https?:\/\/hentai\.pictures\/([a-z0-9][a-z0-9-]{3,}))["']/gi;
+  let m;
+  while ((m = re.exec(html)) !== null && out.length < (max || 40)) {
+    const slug = m[2];
+    if (seen[slug] || skip[slug] || slug.indexOf("category") === 0) continue;
+    seen[slug] = true;
+    const win = html.slice(Math.max(0, m.index - 100), m.index + 900);
+    let poster = "";
+    const im = win.match(
+      /(?:src|data-src)=["'](https?:\/\/cdn\.hentai\.pictures\/[^"']+)["']/i
+    );
+    if (im) poster = im[1];
+    const title = slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    out.push({
+      id: "hp:" + slug,
+      slug: slug,
+      url: "https://hentai.pictures/" + slug,
+      title: title,
+      poster: poster,
+      siteId: "hp",
+      adult: true,
+    });
+  }
+  return out;
+}
+
+function parseHentaiPicturesPages(html, card) {
+  const pages = [];
+  const seen = {};
+  const slug = (card && card.slug) || "";
+  // full images (sin /thumb/)
+  const re =
+    /(?:src|data-src|href)=["'](https?:\/\/cdn\.hentai\.pictures\/([^/"']+)\/(?!thumb\/)([^"']+\.(?:jpe?g|webp|png)))["']/gi;
+  let m;
+  while ((m = re.exec(html)) !== null && pages.length < PAGES_MAX) {
+    if (slug && m[2] !== slug) continue;
+    const u = m[1].split("?")[0];
+    if (seen[u]) continue;
+    seen[u] = true;
+    pages.push(u);
+  }
+  // si solo hay thumbs, convertir quitando /thumb/
+  if (pages.length < 2) {
+    const re2 =
+      /(?:src|data-src)=["'](https?:\/\/cdn\.hentai\.pictures\/([^/"']+)\/thumb\/([^"']+\.(?:jpe?g|webp|png)))["']/gi;
+    while ((m = re2.exec(html)) !== null && pages.length < PAGES_MAX) {
+      if (slug && m[2] !== slug) continue;
+      const u = ("https://cdn.hentai.pictures/" + m[2] + "/" + m[3]).split("?")[0];
+      if (seen[u]) continue;
+      seen[u] = true;
+      pages.push(u);
+    }
+  }
+  return pages;
+}
+
+function parseEveriaList(html, max) {
+  const out = [];
+  const seen = {};
+  const re =
+    /href=["'](https?:\/\/everia\.club\/(\d{4}\/\d{2}\/\d{2}\/[^"'#?]+\/))["']/gi;
+  let m;
+  while ((m = re.exec(html)) !== null && out.length < (max || 40)) {
+    const url = m[1];
+    const path = m[2];
+    if (seen[path]) continue;
+    seen[path] = true;
+    const slug = path.replace(/\/$/, "").split("/").pop() || path;
+    const win = html.slice(Math.max(0, m.index - 150), m.index + 1200);
+    let poster = "";
+    const im = win.match(
+      /(?:src|data-src|data-lazy-src)=["'](https?:\/\/[^"']+\.(?:jpe?g|webp|png))["']/i
+    );
+    if (im && !/avatar|logo|icon|emoji/i.test(im[1])) poster = im[1];
+    let title = decodeURIComponent(slug).replace(/-/g, " ");
+    try {
+      title = title.replace(/[^\w\s\u0080-\uffff.-]+/g, " ").replace(/\s+/g, " ").trim();
+    } catch (e) {}
+    out.push({
+      id: "ev:" + path.replace(/\//g, "_"),
+      slug: path,
+      url: url,
+      title: title || path,
+      poster: poster,
+      siteId: "ev",
+      adult: true,
+    });
+  }
+  return out;
+}
+
+function parseEveriaPages(html) {
+  const pages = [];
+  const seen = {};
+  const re =
+    /(?:src|data-src|data-lazy-src)=["'](https?:\/\/[^"']+\.(?:jpe?g|webp|png))["']/gi;
+  let m;
+  while ((m = re.exec(html)) !== null && pages.length < PAGES_MAX) {
+    let u = m[1].split("?")[0];
+    // solo fotos de contenido (wp-content/uploads), no avatares ni logos
+    if (!/\/wp-content\/uploads\//i.test(u)) continue;
+    if (/avatar|logo|icon|emoji|sprite|banner|ads?/i.test(u)) continue;
+    // saltar miniaturas WordPress -150x150 etc.
+    if (/-\d{2,4}x\d{2,4}\.(?:jpe?g|webp|png)$/i.test(u)) continue;
+    if (seen[u]) continue;
+    seen[u] = true;
+    pages.push(u);
+  }
+  return pages;
+}
+
 
 function parsePoringaList(html, max) {
   const out = [];
@@ -415,7 +570,9 @@ async function fetchCards(site, secOrPath, page, q) {
   }
 
   const html = await getHtml(site, path, 22000);
-  if (site.id === "pp" || site.id === "pph") return parsePornPicsList(html, 36);
+  if (site.id === "pp") return parsePornPicsList(html, 36);
+  if (site.id === "hp") return parseHentaiPicturesList(html, 36);
+  if (site.id === "ev") return parseEveriaList(html, 36);
   if (site.id === "bs") return parseBabeSourceList(html, 36);
   if (site.id === "pm") return parsePmateList(html, 36);
   return [];
@@ -424,7 +581,9 @@ async function fetchCards(site, secOrPath, page, q) {
 async function fetchPages(site, card) {
   const html = await getHtml(site, card.url, 25000);
   let pages = [];
-  if (site.id === "pp" || site.id === "pph") pages = parsePornPicsPages(html, card);
+  if (site.id === "pp") pages = parsePornPicsPages(html, card);
+  else if (site.id === "hp") pages = parseHentaiPicturesPages(html, card);
+  else if (site.id === "ev") pages = parseEveriaPages(html);
   else if (site.id === "bs") pages = parseBabeSourcePages(html);
   else if (site.id === "pm") pages = parsePmatePages(html);
   return pages.slice(0, PAGES_MAX);
@@ -960,10 +1119,12 @@ function searchTree(state) {
 }
 
 function pageNodes(p, i, pre) {
+  const url = typeof p === "string" ? p : (p && p.url) || "";
+  if (!url) return [];
   return [{
     type: "Image",
     key: (pre || "") + "p" + i,
-    url: typeof p === "string" ? p : p.url,
+    url: url,
     alt: "Foto " + (i + 1),
     altEn: "Photo " + (i + 1),
     fill: true,
@@ -1464,7 +1625,9 @@ export async function screenEvent(ev) {
       }
       const site = siteOfId(siteId) || siteDe(state);
       if (!url && slug) {
-        if (site.id === "pp" || site.id === "pph") url = "https://www.pornpics.com/es/galleries/" + slug + "/";
+        if (site.id === "pp") url = "https://www.pornpics.com/es/galleries/" + slug + "/";
+        else if (site.id === "hp") url = "https://hentai.pictures/" + slug;
+        else if (site.id === "ev") url = site.base + "/" + slug;
         else if (site.id === "bs") url = site.base + "/galleries/" + slug + ".html";
         else if (site.id === "pm") url = site.base + "/" + slug + "/";
       }

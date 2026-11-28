@@ -3,7 +3,7 @@
   "name": "Gallery Hot",
   "author": "Hotaru Yume",
   "creator": "hotaruyume",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "apiVersion": 14,
   "entry": "plugin.js",
   "icon": "icon.png",
@@ -12,6 +12,11 @@
     "www.pornpics.com",
     "cdni.pornpics.com",
     "static.pornpics.com",
+    "hentai.pictures",
+    "www.hentai.pictures",
+    "cdn.hentai.pictures",
+    "everia.club",
+    "www.everia.club",
     "babesource.com",
     "www.babesource.com",
     "media.babesource.com",
@@ -37,5 +42,5 @@
     "icon": "photo_library",
     "adult": true
   },
-  "description": "Galerías adultas: PornPics, Hentai/Anime, BabeSource, PMateHunter. Busca, abre álbum sin anuncios y botón al navegador."
+  "description": "Galerías: PornPics (con Hentai/Anime), Hentai Pictures, Everia photobooks, BabeSource, PMateHunter. Solo fotos del álbum."
 }
