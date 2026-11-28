@@ -384,33 +384,57 @@ function parsePmatePages(html) {
 function parseHentaiPicturesList(html, max) {
   const out = [];
   const seen = {};
+  // mapa slug → primer thumb del HTML (más fiable que ventana local)
+  const posters = {};
+  const reThumb =
+    /https?:\/\/cdn\.hentai\.pictures\/([a-z0-9][a-z0-9-]*)\/thumb\/([^"'?\s]+)/gi;
+  let m;
+  while ((m = reThumb.exec(html)) !== null) {
+    if (!posters[m[1]]) {
+      posters[m[1]] =
+        "https://cdn.hentai.pictures/" + m[1] + "/thumb/" + m[2];
+    }
+  }
   const skip = {
     popular: 1, categories: 1, tags: 1, category: 1, search: 1,
     login: 1, signup: 1, about: 1, contact: 1, privacy: 1, terms: 1,
+    page: 1, feed: 1, rss: 1,
   };
   const re =
     /href=["'](https?:\/\/hentai\.pictures\/([a-z0-9][a-z0-9-]{3,}))["']/gi;
-  let m;
   while ((m = re.exec(html)) !== null && out.length < (max || 40)) {
     const slug = m[2];
     if (seen[slug] || skip[slug] || slug.indexOf("category") === 0) continue;
+    if (!posters[slug] && !/^[a-z0-9]+-[a-z0-9]/i.test(slug) && slug.length < 8) continue;
     seen[slug] = true;
-    const win = html.slice(Math.max(0, m.index - 100), m.index + 900);
-    let poster = "";
-    const im = win.match(
-      /(?:src|data-src)=["'](https?:\/\/cdn\.hentai\.pictures\/[^"']+)["']/i
-    );
-    if (im) poster = im[1];
-    const title = slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const title = slug
+      .replace(/-/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
     out.push({
       id: "hp:" + slug,
       slug: slug,
       url: "https://hentai.pictures/" + slug,
       title: title,
-      poster: poster,
+      poster: posters[slug] || "",
       siteId: "hp",
       adult: true,
     });
+  }
+  // si no hubo href pero sí thumbs, usar thumbs
+  if (!out.length) {
+    for (const slug in posters) {
+      if (out.length >= (max || 40)) break;
+      if (skip[slug]) continue;
+      out.push({
+        id: "hp:" + slug,
+        slug: slug,
+        url: "https://hentai.pictures/" + slug,
+        title: slug.replace(/-/g, " "),
+        poster: posters[slug],
+        siteId: "hp",
+        adult: true,
+      });
+    }
   }
   return out;
 }
@@ -419,28 +443,31 @@ function parseHentaiPicturesPages(html, card) {
   const pages = [];
   const seen = {};
   const slug = (card && card.slug) || "";
-  // full images (sin /thumb/)
-  const re =
-    /(?:src|data-src|href)=["'](https?:\/\/cdn\.hentai\.pictures\/([^/"']+)\/(?!thumb\/)([^"']+\.(?:jpe?g|webp|png)))["']/gi;
+  // preferir full: /{slug}/file.webp  (sin segmento thumb)
+  const reAll =
+    /https?:\/\/cdn\.hentai\.pictures\/([a-z0-9][a-z0-9-]*)\/([^"'?\s]+)/gi;
   let m;
-  while ((m = re.exec(html)) !== null && pages.length < PAGES_MAX) {
-    if (slug && m[2] !== slug) continue;
-    const u = m[1].split("?")[0];
+  const fulls = [];
+  const thumbs = [];
+  while ((m = reAll.exec(html)) !== null) {
+    if (slug && m[1] !== slug) continue;
+    const path = m[2];
+    const u = ("https://cdn.hentai.pictures/" + m[1] + "/" + path).split("?")[0];
+    if (path.indexOf("thumb/") === 0) {
+      // convertir thumb → full
+      const name = path.replace(/^thumb\//, "");
+      const full = "https://cdn.hentai.pictures/" + m[1] + "/" + name;
+      thumbs.push(full);
+    } else {
+      fulls.push(u);
+    }
+  }
+  const list = fulls.length ? fulls : thumbs;
+  for (let i = 0; i < list.length && pages.length < PAGES_MAX; i++) {
+    const u = list[i];
     if (seen[u]) continue;
     seen[u] = true;
     pages.push(u);
-  }
-  // si solo hay thumbs, convertir quitando /thumb/
-  if (pages.length < 2) {
-    const re2 =
-      /(?:src|data-src)=["'](https?:\/\/cdn\.hentai\.pictures\/([^/"']+)\/thumb\/([^"']+\.(?:jpe?g|webp|png)))["']/gi;
-    while ((m = re2.exec(html)) !== null && pages.length < PAGES_MAX) {
-      if (slug && m[2] !== slug) continue;
-      const u = ("https://cdn.hentai.pictures/" + m[2] + "/" + m[3]).split("?")[0];
-      if (seen[u]) continue;
-      seen[u] = true;
-      pages.push(u);
-    }
   }
   return pages;
 }
@@ -448,25 +475,30 @@ function parseHentaiPicturesPages(html, card) {
 function parseEveriaList(html, max) {
   const out = [];
   const seen = {};
-  const re =
-    /href=["'](https?:\/\/everia\.club\/(\d{4}\/\d{2}\/\d{2}\/[^"'#?]+\/))["']/gi;
-  let m;
-  while ((m = re.exec(html)) !== null && out.length < (max || 40)) {
+  // bloques con class post (WordPress)
+  const blocks = html.split(/class=["'][^"']*post[^"']*["']/i);
+  const scan = (chunk, limit) => {
+    const re =
+      /href=["'](https?:\/\/everia\.club\/(\d{4}\/\d{2}\/\d{2}\/[^"'#?]+\/))["']/i;
+    const m = re.exec(chunk);
+    if (!m) return;
     const url = m[1];
     const path = m[2];
-    if (seen[path]) continue;
+    if (seen[path]) return;
     seen[path] = true;
     const slug = path.replace(/\/$/, "").split("/").pop() || path;
-    const win = html.slice(Math.max(0, m.index - 150), m.index + 1200);
     let poster = "";
-    const im = win.match(
+    const im = chunk.match(
       /(?:src|data-src|data-lazy-src)=["'](https?:\/\/[^"']+\.(?:jpe?g|webp|png))["']/i
     );
-    if (im && !/avatar|logo|icon|emoji/i.test(im[1])) poster = im[1];
-    let title = decodeURIComponent(slug).replace(/-/g, " ");
+    if (im && !/avatar|logo|icon|emoji|sprite/i.test(im[1])) poster = im[1];
+    let title = slug;
     try {
-      title = title.replace(/[^\w\s\u0080-\uffff.-]+/g, " ").replace(/\s+/g, " ").trim();
-    } catch (e) {}
+      title = decodeURIComponent(slug).replace(/-/g, " ");
+      title = title.replace(/\s+/g, " ").trim();
+    } catch (e) {
+      title = slug.replace(/-/g, " ");
+    }
     out.push({
       id: "ev:" + path.replace(/\//g, "_"),
       slug: path,
@@ -476,6 +508,34 @@ function parseEveriaList(html, max) {
       siteId: "ev",
       adult: true,
     });
+  };
+  for (let i = 1; i < blocks.length && out.length < (max || 40); i++) {
+    scan(blocks[i].slice(0, 2500));
+  }
+  // fallback global
+  if (!out.length) {
+    const re =
+      /href=["'](https?:\/\/everia\.club\/(\d{4}\/\d{2}\/\d{2}\/[^"'#?]+\/))["']/gi;
+    let m;
+    while ((m = re.exec(html)) !== null && out.length < (max || 40)) {
+      const path = m[2];
+      if (seen[path]) continue;
+      seen[path] = true;
+      const slug = path.replace(/\/$/, "").split("/").pop() || path;
+      let title = slug;
+      try {
+        title = decodeURIComponent(slug).replace(/-/g, " ");
+      } catch (e) {}
+      out.push({
+        id: "ev:" + path.replace(/\//g, "_"),
+        slug: path,
+        url: m[1],
+        title: title,
+        poster: "",
+        siteId: "ev",
+        adult: true,
+      });
+    }
   }
   return out;
 }
@@ -564,7 +624,10 @@ async function fetchCards(site, secOrPath, page, q) {
 
   const p = parseInt(page, 10) || 1;
   if (p > 1) {
-    if (site.id === "pp") path = path.replace(/\/?$/, "/") + (path.indexOf("?") >= 0 ? "&" : "?") + "page=" + p;
+    if (site.id === "pp" || site.id === "hp")
+      path = path + (path.indexOf("?") >= 0 ? "&" : "?") + "page=" + p;
+    else if (site.id === "ev")
+      path = "/page/" + p + "/";
     else if (site.id === "bs") path = path.replace(/\/?$/, "/") + "page/" + p + "/";
     else if (site.id === "pm") path = path + (path.indexOf("?") >= 0 ? "&" : "?") + "paged=" + p;
   }
@@ -654,10 +717,42 @@ function rememberCard(it) {
   } catch (e) {}
 }
 
+// Título en 2 filas, ancho ~ imagen (120px ≈ 18–22 chars/línea)
+function twoLines(t) {
+  const s = String(t || "").trim().replace(/\s+/g, " ");
+  if (!s) return [""];
+  if (s.length <= 18) return [s];
+  const max = 18;
+  // cortar por palabra cerca del medio, tope max por línea
+  let cut = -1;
+  const mid = Math.min(max, Math.ceil(Math.min(s.length, max * 2) / 2));
+  for (let i = 8; i < Math.min(s.length - 1, max + 2); i++) {
+    if (s[i] === " ") {
+      cut = i;
+      if (i >= mid - 2) break;
+    }
+  }
+  if (cut < 0) cut = Math.min(max, s.length);
+  let a = s.slice(0, cut).trim();
+  let b = s.slice(cut).trim();
+  if (a.length > max) a = a.slice(0, max - 1).trim() + "…";
+  if (b.length > max) b = b.slice(0, max - 1).trim() + "…";
+  return b ? [a, b] : [a];
+}
+
 function posterCard(it, prefix) {
   rememberCard(it);
   const id = String(it.id || (it.siteId + ":" + it.slug));
   const keySafe = id.replace(/[^a-z0-9:_-]/gi, "-");
+  const lines = twoLines(it.title || it.slug || "");
+  const titleNodes = lines.map((ln, i) => ({
+    type: "Text",
+    key: keySafe + "t" + i,
+    text: ln,
+    textEn: ln,
+    style: "caption",
+    padding: { left: 4, right: 4, top: i === 0 ? 4 : 0, bottom: i === lines.length - 1 ? 4 : 0 },
+  }));
   return {
     type: "Card",
     key: (prefix || "c") + keySafe,
@@ -677,14 +772,7 @@ function posterCard(it, prefix) {
           children: [{ type: "Icon", name: "image", color: "muted" }],
         },
       },
-      {
-        type: "Text",
-        text: it.title || it.slug || "",
-        textEn: it.title || it.slug || "",
-        style: "caption",
-        padding: 8,
-      },
-    ],
+    ].concat(titleNodes),
   };
 }
 
@@ -826,7 +914,33 @@ function railSection(state, sec) {
     ];
   }
   if (!items.length) return [];
-  const cards = items.slice(0, 18).map((it, i) => posterCard(it, sec.key + i + "-"));
+  const cards = items.slice(0, 36).map((it, i) => posterCard(it, sec.key + i + "-"));
+  // botón «Ver más» al final del rail
+  cards.push({
+    type: "Card",
+    key: "vm-" + sec.key + "-" + (cat.page || 1),
+    flush: true,
+    onTap: { event: "verMas", arg: sec.key },
+    children: [
+      {
+        type: "Column",
+        padding: 16,
+        gap: 8,
+        crossAxisAlignment: "center",
+        mainAxisAlignment: "center",
+        children: [
+          { type: "Icon", name: "add", color: "muted" },
+          {
+            type: "Text",
+            text: "Ver más",
+            textEn: "See more",
+            style: "caption",
+            color: "muted",
+          },
+        ],
+      },
+    ],
+  });
   return [
     {
       type: "Text",
@@ -837,7 +951,7 @@ function railSection(state, sec) {
     },
     {
       type: "SingleChildScrollView",
-      key: "r-" + sec.key,
+      key: "r-" + sec.key + "-p" + (cat.page || 1) + "-n" + items.length,
       direction: "horizontal",
       padding: 16,
       children: [{ type: "Row", gap: 8, children: cards }],
@@ -1586,7 +1700,7 @@ export async function screenEvent(ev) {
             try {
               const items = await fetchCards(site, sec, 1);
               const next = Object.assign({}, cats);
-              next[sec.key] = { items: items, loading: false, error: false };
+              next[sec.key] = { items: items, page: 1, loading: false, error: false };
               return { state: { cats: next } };
             } catch (e) {
               kino.log("sec", sec.key + " " + (e && e.message));
@@ -1609,6 +1723,45 @@ export async function screenEvent(ev) {
     }
 
     // Tocar álbum → cargar TODAS las fotos y abrir el lector
+    if (name === "verMas") {
+      const key = String(ev.arg || "");
+      const site = siteDe(state);
+      const sec = (site.sections || []).find((x) => x.key === key);
+      const cats = Object.assign({}, state.cats || {});
+      const cat = cats[key];
+      if (!sec || !cat) return { toast: "Sección no disponible" };
+      if ((cat.items || []).length >= 120) return { toast: "La sección ya está completa" };
+      const page = (cat.page || 1) + 1;
+      try {
+        const more = await fetchCards(site, sec, page, null);
+        const vistos = {};
+        for (let i = 0; i < (cat.items || []).length; i++) {
+          vistos[cat.items[i].id] = true;
+        }
+        const added = [];
+        for (let i = 0; i < more.length; i++) {
+          if (!vistos[more[i].id]) {
+            vistos[more[i].id] = true;
+            added.push(more[i]);
+            rememberCard(more[i]);
+          }
+        }
+        if (!added.length) return { toast: "No hay más álbumes" };
+        cats[key] = {
+          items: (cat.items || []).concat(added),
+          page: page,
+          error: false,
+        };
+        return {
+          state: { cats: cats },
+          toast: "+" + added.length + " álbumes",
+        };
+      } catch (e) {
+        kino.log("verMas", e && e.message);
+        return { toast: "No se pudo cargar más" };
+      }
+    }
+
     if (name === "openDetail") {
       // arg = id string (pp:slug) — los objetos no viajan bien en onTap
       const id = String(ev.arg || "").trim();
